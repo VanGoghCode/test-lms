@@ -25,7 +25,7 @@ jobs:
           api-key: ${{ secrets.ASU_API_KEY }}
           base-url: https://api-main.aiml.asu.edu/queryV2
           model: gpt5_2
-          # model-provider: provider-id
+          model-provider: openai
           # Architecture guide:
           # - single-pass: fastest + lowest cost; best for small PRs.
           # - iterative: deeper step-by-step analysis; best for medium PRs.
