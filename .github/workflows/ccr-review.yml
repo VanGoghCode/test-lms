@@ -20,7 +20,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run CCR review action
-        uses: VanGoghCode/ccr-test@v1.0.5
+        uses: VanGoghCode/ccr-test@v1
         with:
           api-key: ${{ secrets.ASU_API_KEY }}
           base-url: https://api-main.aiml.asu.edu/queryV2
