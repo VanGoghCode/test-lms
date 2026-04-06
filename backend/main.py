@@ -37,11 +37,16 @@ class Lesson(BaseModel):
     id: int
     title: str
     duration: str
+    video_url: Optional[str] = None
 
 class Module(BaseModel):
     id: int
     title: str
     lessons: List[Lesson]
+
+class CourseStatus(str, Enum):
+    DRAFT = "draft"
+    PUBLISHED = "published"
 
 class Course(BaseModel):
     id: int
@@ -52,6 +57,7 @@ class Course(BaseModel):
     thumbnail: str
     duration: str
     modules: List[Module]
+    status: CourseStatus = CourseStatus.DRAFT
 
 class Enrollment(BaseModel):
     id: int
@@ -178,6 +184,32 @@ def login(credentials: UserLogin):
 @app.get("/api/auth/me")
 def get_me(current_user: dict = Depends(get_current_user)):
     return current_user
+
+# Course Management Models
+class LessonCreate(BaseModel):
+    title: str
+    duration: str
+    video_url: Optional[str] = None
+
+class ModuleCreate(BaseModel):
+    title: str
+    lessons: List[LessonCreate] = []
+
+class CourseCreate(BaseModel):
+    title: str
+    description: str
+    category: str
+    thumbnail: str
+    duration: str
+    modules: List[ModuleCreate] = []
+
+class CourseUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    thumbnail: Optional[str] = None
+    duration: Optional[str] = None
+    modules: Optional[List[ModuleCreate]] = None
 
 # Mock Data
 instructors = [
@@ -320,6 +352,236 @@ def get_courses(category: str = None, search: str = None):
 @app.get("/api/courses/{course_id}")
 def get_course(course_id: int):
     return next((c for c in courses if c.id == course_id), None)
+
+# Instructor Course Management
+@app.post("/api/courses", status_code=201)
+def create_course(course_data: CourseCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course_id = len(courses) + 1
+    
+    # Convert module/lesson creation to proper objects
+    modules = []
+    for m_idx, m in enumerate(course_data.modules):
+        lessons = []
+        for l_idx, l in enumerate(m.lessons):
+            lessons.append(Lesson(
+                id=m_idx * 100 + l_idx + 1,
+                title=l.title,
+                duration=l.duration,
+                video_url=l.video_url
+            ))
+        modules.append(Module(
+            id=m_idx + 1,
+            title=m.title,
+            lessons=lessons
+        ))
+    
+    new_course = Course(
+        id=course_id,
+        title=course_data.title,
+        description=course_data.description,
+        instructor=Instructor(id=current_user["id"], name=current_user["name"], avatar=current_user["avatar"]),
+        category=course_data.category,
+        thumbnail=course_data.thumbnail,
+        duration=course_data.duration,
+        modules=modules,
+        status=CourseStatus.DRAFT
+    )
+    courses.append(new_course)
+    return new_course
+
+@app.put("/api/courses/{course_id}")
+def update_course(course_id: int, course_data: CourseUpdate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    # Check ownership for instructors (admins can edit any)
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this course")
+    
+    if course_data.title is not None:
+        course.title = course_data.title
+    if course_data.description is not None:
+        course.description = course_data.description
+    if course_data.category is not None:
+        course.category = course_data.category
+    if course_data.thumbnail is not None:
+        course.thumbnail = course_data.thumbnail
+    if course_data.duration is not None:
+        course.duration = course_data.duration
+    if course_data.modules is not None:
+        modules = []
+        for m_idx, m in enumerate(course_data.modules):
+            lessons = []
+            for l_idx, l in enumerate(m.lessons):
+                lessons.append(Lesson(
+                    id=m_idx * 100 + l_idx + 1,
+                    title=l.title,
+                    duration=l.duration,
+                    video_url=l.video_url
+                ))
+            modules.append(Module(id=m_idx + 1, title=m.title, lessons=lessons))
+        course.modules = modules
+    
+    return course
+
+@app.delete("/api/courses/{course_id}")
+def delete_course(course_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this course")
+    
+    courses.remove(course)
+    return {"message": "Course deleted"}
+
+@app.post("/api/courses/{course_id}/publish")
+def publish_course(course_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to publish this course")
+    
+    course.status = CourseStatus.PUBLISHED
+    return course
+
+@app.post("/api/courses/{course_id}/unpublish")
+def unpublish_course(course_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to unpublish this course")
+    
+    course.status = CourseStatus.DRAFT
+    return course
+
+# Module CRUD
+@app.post("/api/courses/{course_id}/modules")
+def add_module(course_id: int, module: ModuleCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this course")
+    
+    module_id = len(course.modules) + 1
+    lessons = [
+        Lesson(id=module_id * 100 + i + 1, title=l.title, duration=l.duration, video_url=l.video_url)
+        for i, l in enumerate(module.lessons)
+    ]
+    new_module = Module(id=module_id, title=module.title, lessons=lessons)
+    course.modules.append(new_module)
+    return new_module
+
+@app.put("/api/courses/{course_id}/modules/{module_id}")
+def update_module(course_id: int, module_id: int, module: ModuleCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this course")
+    
+    existing_module = next((m for m in course.modules if m.id == module_id), None)
+    if not existing_module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    
+    lessons = [
+        Lesson(id=module_id * 100 + i + 1, title=l.title, duration=l.duration, video_url=l.video_url)
+        for i, l in enumerate(module.lessons)
+    ]
+    existing_module.title = module.title
+    existing_module.lessons = lessons
+    return existing_module
+
+@app.delete("/api/courses/{course_id}/modules/{module_id}")
+def delete_module(course_id: int, module_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this course")
+    
+    module = next((m for m in course.modules if m.id == module_id), None)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    
+    course.modules.remove(module)
+    return {"message": "Module deleted"}
+
+# Lesson CRUD
+@app.post("/api/courses/{course_id}/modules/{module_id}/lessons")
+def add_lesson(course_id: int, module_id: int, lesson: LessonCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this course")
+    
+    module = next((m for m in course.modules if m.id == module_id), None)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    
+    lesson_id = len(module.lessons) + 1
+    new_lesson = Lesson(id=lesson_id, title=lesson.title, duration=lesson.duration, video_url=lesson.video_url)
+    module.lessons.append(new_lesson)
+    return new_lesson
+
+@app.put("/api/courses/{course_id}/modules/{module_id}/lessons/{lesson_id}")
+def update_lesson(course_id: int, module_id: int, lesson_id: int, lesson: LessonCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this course")
+    
+    module = next((m for m in course.modules if m.id == module_id), None)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    
+    existing_lesson = next((l for l in module.lessons if l.id == lesson_id), None)
+    if not existing_lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    
+    existing_lesson.title = lesson.title
+    existing_lesson.duration = lesson.duration
+    existing_lesson.video_url = lesson.video_url
+    return existing_lesson
+
+@app.delete("/api/courses/{course_id}/modules/{module_id}/lessons/{lesson_id}")
+def delete_lesson(course_id: int, module_id: int, lesson_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this course")
+    
+    module = next((m for m in course.modules if m.id == module_id), None)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    
+    lesson = next((l for l in module.lessons if l.id == lesson_id), None)
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    
+    module.lessons.remove(lesson)
+    return {"message": "Lesson deleted"}
+
+# Get instructor's courses
+@app.get("/api/instructor/courses")
+def get_instructor_courses(current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    return [c for c in courses if c.instructor.id == current_user["id"]]
 
 @app.get("/api/users/{user_id}/enrollments")
 def get_enrollments(user_id: int, current_user: dict = Depends(get_current_user)):
