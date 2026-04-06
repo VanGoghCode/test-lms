@@ -1,19 +1,95 @@
-async function getData() {
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-  const [enrollments, assignments] = await Promise.all([
-    fetch(`${baseUrl}/api/users/1/enrollments`, { cache: 'no-store' }).then(r => r.json()),
-    fetch(`${baseUrl}/api/users/1/assignments`, { cache: 'no-store' }).then(r => r.json()),
-  ])
-  return { enrollments, assignments }
+'use client'
+import { useAuth } from './auth-context'
+import { useEffect, useState } from 'react'
+
+interface Enrollment {
+  id: number
+  course_id: number
+  user_id: number
+  progress: number
+  enrolled_at: string
+  course: any
 }
 
-export default async function Home() {
-  const { enrollments, assignments } = await getData()
-  const pendingAssignments = assignments.filter((a: any) => a.status === 'pending').length
+interface Assignment {
+  id: number
+  title: string
+  course_id: number
+  course_name: string
+  due_date: string
+  status: string
+  grade?: number
+}
+
+export default function Home() {
+  const { user, token, isLoading: authLoading } = useAuth()
+  const [enrollments, setEnrollments] = useState<Enrollment[]>([])
+  const [assignments, setAssignments] = useState<Assignment[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (authLoading) return
+    
+    if (!user || !token) {
+      setLoading(false)
+      return
+    }
+
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+    fetch(`${baseUrl}/api/users/${user.id}/enrollments`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(r => r.json())
+      .then(setEnrollments)
+      .catch(console.error)
+
+    fetch(`${baseUrl}/api/users/${user.id}/assignments`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(r => r.json())
+      .then(setAssignments)
+      .catch(console.error)
+      .finally(() => setLoading(false))
+  }, [user, token, authLoading])
+
+  if (authLoading || loading) {
+    return <div className="container"><p>Loading...</p></div>
+  }
+
+  if (!user) {
+    return (
+      <>
+        <h1>Welcome to LMS</h1>
+        <p className="subtitle">Start your learning journey today</p>
+        <div className="grid">
+          <a href="/login" className="card">
+            <div className="card-thumbnail" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+              L
+            </div>
+            <div className="card-body">
+              <h3 className="card-title">Sign In</h3>
+              <p className="card-meta">Access your courses and track progress</p>
+            </div>
+          </a>
+          <a href="/register" className="card">
+            <div className="card-thumbnail" style={{ background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' }}>
+              R
+            </div>
+            <div className="card-body">
+              <h3 className="card-title">Create Account</h3>
+              <p className="card-meta">Join our learning community</p>
+            </div>
+          </a>
+        </div>
+      </>
+    )
+  }
+
+  const pendingAssignments = assignments.filter((a) => a.status === 'pending').length
 
   return (
     <>
-      <h1>Welcome back, Alex</h1>
+      <h1>Welcome back, {user.name.split(' ')[0]}</h1>
       <p className="subtitle">Continue your learning journey</p>
 
       <div className="stats">
