@@ -1,9 +1,23 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import List, Optional
 from pydantic import BaseModel
+from passlib.context import CryptContext
+import jwt
+from datetime import datetime, timedelta
+from enum import Enum
 
 app = FastAPI()
+security = HTTPBearer()
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+SECRET_KEY = "your-secret-key-change-in-production"
+ALGORITHM = "HS256"
+
+class Role(str, Enum):
+    STUDENT = "student"
+    INSTRUCTOR = "instructor"
+    ADMIN = "admin"
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,6 +74,110 @@ class User(BaseModel):
     name: str
     email: str
     avatar: str
+
+# Auth Models
+class UserCreate(BaseModel):
+    name: str
+    email: str
+    password: str
+    role: Role = Role.STUDENT
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    user: User
+
+# Auth helpers
+def verify_password(plain: str, hashed: str) -> bool:
+    return pwd_context.verify(plain, hashed)
+
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+def create_token(user_id: int, email: str, role: Role) -> str:
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "role": role.value,
+        "exp": datetime.utcnow() + timedelta(days=7)
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+def decode_token(token: str) -> dict:
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+# In-memory user store (replace with database in production)
+users_db: dict[int, dict] = {}
+user_by_email: dict[str, dict] = {}
+
+# Seed default users
+default_users = [
+    {"id": 1, "name": "Alex Rivera", "email": "alex@example.com", "password": get_password_hash("password123"), "role": Role.STUDENT, "avatar": "AR"},
+    {"id": 2, "name": "Jordan Lee", "email": "jordan@example.com", "password": get_password_hash("password123"), "role": Role.INSTRUCTOR, "avatar": "JL"},
+    {"id": 3, "name": "Casey Morgan", "email": "casey@example.com", "password": get_password_hash("password123"), "role": Role.ADMIN, "avatar": "CM"},
+]
+for u in default_users:
+    users_db[u["id"]] = u
+    user_by_email[u["email"]] = u
+
+# Auth dependency
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    token = credentials.credentials
+    payload = decode_token(token)
+    user = users_db.get(int(payload["sub"]))
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+def require_role(*allowed_roles: Role):
+    def role_checker(current_user: dict = Depends(get_current_user)) -> dict:
+        if Role(current_user["role"]) not in allowed_roles:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return current_user
+    return role_checker
+
+# Auth endpoints
+@app.post("/api/auth/register", response_model=Token)
+def register(user_data: UserCreate):
+    if user_data.email in user_by_email:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    user_id = len(users_db) + 1
+    new_user = {
+        "id": user_id,
+        "name": user_data.name,
+        "email": user_data.email,
+        "password": get_password_hash(user_data.password),
+        "role": user_data.role,
+        "avatar": "".join(w[0] for w in user_data.name.split()[:2]).upper()
+    }
+    users_db[user_id] = new_user
+    user_by_email[user_data.email] = new_user
+    
+    token = create_token(user_id, user_data.email, user_data.role)
+    return {"access_token": token, "token_type": "bearer", "user": new_user}
+
+@app.post("/api/auth/login", response_model=Token)
+def login(credentials: UserLogin):
+    user = user_by_email.get(credentials.email)
+    if not user or not verify_password(credentials.password, user["password"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    token = create_token(user["id"], user["email"], user["role"])
+    return {"access_token": token, "token_type": "bearer", "user": user}
+
+@app.get("/api/auth/me")
+def get_me(current_user: dict = Depends(get_current_user)):
+    return current_user
 
 # Mock Data
 instructors = [
@@ -204,7 +322,7 @@ def get_course(course_id: int):
     return next((c for c in courses if c.id == course_id), None)
 
 @app.get("/api/users/{user_id}/enrollments")
-def get_enrollments(user_id: int):
+def get_enrollments(user_id: int, current_user: dict = Depends(get_current_user)):
     user_enrollments = [e for e in enrollments if e.user_id == user_id]
     result = []
     for e in user_enrollments:
