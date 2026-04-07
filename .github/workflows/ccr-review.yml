@@ -27,7 +27,7 @@ jobs:
       run: git diff --name-status ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}
   
     - name: Run CCR review action
-      uses: VanGoghCode/ccr-test@v1.0.9
+      uses: VanGoghCode/ccr-test@v1
       with:
         api-key: ${{ secrets.ASU_API_KEY }}
         github-token: ${{ github.token }}
