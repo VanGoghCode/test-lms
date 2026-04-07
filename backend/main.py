@@ -66,6 +66,19 @@ class Enrollment(BaseModel):
     progress: int
     enrolled_at: str
 
+# Progress Tracking Models
+class LessonProgress(BaseModel):
+    lesson_id: int
+    completed: bool = False
+
+class CourseProgress(BaseModel):
+    course_id: int
+    completed_lessons: List[int] = []
+
+class ProgressUpdate(BaseModel):
+    lesson_id: int
+    completed: bool
+
 class Assignment(BaseModel):
     id: int
     title: str
@@ -326,6 +339,9 @@ enrollments = [
     Enrollment(id=3, course_id=5, user_id=1, progress=80, enrolled_at="2024-01-20"),
 ]
 
+# Progress tracking: {user_id: {course_id: [completed_lesson_ids]}}
+progress_db: dict[int, dict[int, List[int]]] = {}
+
 assignments = [
     Assignment(id=1, title="Python Basics Quiz", course_id=1, course_name="Python Fundamentals", due_date="2024-03-15", status="graded", grade=92),
     Assignment(id=2, title="Functions Assignment", course_id=1, course_name="Python Fundamentals", due_date="2024-03-20", status="submitted"),
@@ -582,6 +598,96 @@ def delete_lesson(course_id: int, module_id: int, lesson_id: int, current_user: 
 @app.get("/api/instructor/courses")
 def get_instructor_courses(current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
     return [c for c in courses if c.instructor.id == current_user["id"]]
+
+# Progress Tracking Endpoints
+@app.get("/api/courses/{course_id}/progress")
+def get_course_progress(course_id: int, current_user: dict = Depends(get_current_user)):
+    """Get user's progress for a specific course"""
+    user_progress = progress_db.get(current_user["id"], {})
+    completed_lessons = user_progress.get(course_id, [])
+    
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    # Calculate total lessons
+    total_lessons = sum(len(m.lessons) for m in course.modules)
+    progress_percent = int((len(completed_lessons) / total_lessons * 100) if total_lessons > 0 else 0)
+    
+    return {
+        "course_id": course_id,
+        "completed_lessons": completed_lessons,
+        "total_lessons": total_lessons,
+        "progress_percent": progress_percent
+    }
+
+@app.post("/api/courses/{course_id}/progress")
+def update_lesson_progress(course_id: int, progress: ProgressUpdate, current_user: dict = Depends(get_current_user)):
+    """Update completion status for a lesson"""
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    # Verify lesson exists
+    lesson_exists = any(
+        any(l.id == progress.lesson_id for l in m.lessons)
+        for m in course.modules
+    )
+    if not lesson_exists:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    
+    # Initialize user progress if needed
+    if current_user["id"] not in progress_db:
+        progress_db[current_user["id"]] = {}
+    if course_id not in progress_db[current_user["id"]]:
+        progress_db[current_user["id"]][course_id] = []
+    
+    user_course_progress = progress_db[current_user["id"]][course_id]
+    
+    if progress.completed and progress.lesson_id not in user_course_progress:
+        user_course_progress.append(progress.lesson_id)
+    elif not progress.completed and progress.lesson_id in user_course_progress:
+        user_course_progress.remove(progress.lesson_id)
+    
+    # Recalculate progress percentage
+    total_lessons = sum(len(m.lessons) for m in course.modules)
+    progress_percent = int((len(user_course_progress) / total_lessons * 100) if total_lessons > 0 else 0)
+    
+    # Update enrollment progress
+    enrollment = next((e for e in enrollments if e.course_id == course_id and e.user_id == current_user["id"]), None)
+    if enrollment:
+        enrollment.progress = progress_percent
+    
+    return {
+        "course_id": course_id,
+        "completed_lessons": user_course_progress,
+        "total_lessons": total_lessons,
+        "progress_percent": progress_percent
+    }
+
+@app.get("/api/users/{user_id}/progress")
+def get_user_all_progress(user_id: int, current_user: dict = Depends(get_current_user)):
+    """Get all progress for a user"""
+    if current_user["id"] != user_id and current_user["role"] != Role.ADMIN:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    user_progress = progress_db.get(user_id, {})
+    result = []
+    
+    for course_id, completed_lessons in user_progress.items():
+        course = next((c for c in courses if c.id == course_id), None)
+        if course:
+            total_lessons = sum(len(m.lessons) for m in course.modules)
+            progress_percent = int((len(completed_lessons) / total_lessons * 100) if total_lessons > 0 else 0)
+            result.append({
+                "course_id": course_id,
+                "course_title": course.title,
+                "completed_lessons": completed_lessons,
+                "total_lessons": total_lessons,
+                "progress_percent": progress_percent
+            })
+    
+    return result
 
 @app.get("/api/users/{user_id}/enrollments")
 def get_enrollments(user_id: int, current_user: dict = Depends(get_current_user)):
