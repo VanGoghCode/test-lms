@@ -36,7 +36,11 @@ jobs:
         model: gpt5_2
         base-ref: ${{ github.event.pull_request.base.sha }}
         head-ref: ${{ github.event.pull_request.head.sha }}
-        architecture: parallel
+        # Architecture guide:
+          # - single-pass: fastest + lowest cost; best for small PRs.
+          # - iterative: deeper step-by-step analysis; best for medium PRs.
+          # - parallel: broadest coverage + best for high-risk/large PRs.
+        architecture: single-pass
         post-inline-comments: "true"
         inline-comment-limit: "30"
         inline-comment-mode: file-coverage
