@@ -84,9 +84,29 @@ class Assignment(BaseModel):
     title: str
     course_id: int
     course_name: str
+    description: str
     due_date: str
     status: str
+    max_grade: int = 100
     grade: Optional[int] = None
+    feedback: Optional[str] = None
+
+# Assignment System Models
+class AssignmentCreate(BaseModel):
+    title: str
+    course_id: int
+    description: str
+    due_date: str
+    max_grade: int = 100
+
+class AssignmentSubmission(BaseModel):
+    assignment_id: int
+    content: str
+    file_url: Optional[str] = None
+
+class GradeSubmission(BaseModel):
+    grade: int
+    feedback: Optional[str] = None
 
 class User(BaseModel):
     id: int
@@ -343,17 +363,20 @@ enrollments = [
 progress_db: dict[int, dict[int, List[int]]] = {}
 
 assignments = [
-    Assignment(id=1, title="Python Basics Quiz", course_id=1, course_name="Python Fundamentals", due_date="2024-03-15", status="graded", grade=92),
-    Assignment(id=2, title="Functions Assignment", course_id=1, course_name="Python Fundamentals", due_date="2024-03-20", status="submitted"),
-    Assignment(id=3, title="JavaScript Project", course_id=2, course_name="JavaScript Essentials", due_date="2024-03-25", status="pending"),
-    Assignment(id=4, title="Design Critique", course_id=3, course_name="UI Design Principles", due_date="2024-03-18", status="graded", grade=88),
-    Assignment(id=5, title="Figma Wireframe", course_id=4, course_name="Figma Masterclass", due_date="2024-03-22", status="pending"),
-    Assignment(id=6, title="Data Analysis Report", course_id=5, course_name="Data Science with Python", due_date="2024-03-28", status="pending"),
-    Assignment(id=7, title="OOP Exercise", course_id=1, course_name="Python Fundamentals", due_date="2024-03-10", status="graded", grade=85),
-    Assignment(id=8, title="Color Palette Design", course_id=3, course_name="UI Design Principles", due_date="2024-03-12", status="submitted"),
-    Assignment(id=9, title="Pandas Practice", course_id=5, course_name="Data Science with Python", due_date="2024-03-30", status="pending"),
-    Assignment(id=10, title="ML Model Building", course_id=6, course_name="Machine Learning Intro", due_date="2024-04-05", status="pending"),
+    Assignment(id=1, title="Python Basics Quiz", course_id=1, course_name="Python Fundamentals", description="Complete the quiz on Python basics", due_date="2024-03-15", status="graded", grade=92),
+    Assignment(id=2, title="Functions Assignment", course_id=1, course_name="Python Fundamentals", description="Write functions to solve the given problems", due_date="2024-03-20", status="submitted"),
+    Assignment(id=3, title="JavaScript Project", course_id=2, course_name="JavaScript Essentials", description="Build a simple to-do app", due_date="2024-03-25", status="pending"),
+    Assignment(id=4, title="Design Critique", course_id=3, course_name="UI Design Principles", description="Critique the provided design", due_date="2024-03-18", status="graded", grade=88),
+    Assignment(id=5, title="Figma Wireframe", course_id=4, course_name="Figma Masterclass", description="Create a wireframe for a mobile app", due_date="2024-03-22", status="pending"),
+    Assignment(id=6, title="Data Analysis Report", course_id=5, course_name="Data Science with Python", description="Analyze the provided dataset", due_date="2024-03-28", status="pending"),
+    Assignment(id=7, title="OOP Exercise", course_id=1, course_name="Python Fundamentals", description="Implement a class hierarchy", due_date="2024-03-10", status="graded", grade=85),
+    Assignment(id=8, title="Color Palette Design", course_id=3, course_name="UI Design Principles", description="Design a color palette", due_date="2024-03-12", status="submitted"),
+    Assignment(id=9, title="Pandas Practice", course_id=5, course_name="Data Science with Python", description="Complete pandas exercises", due_date="2024-03-30", status="pending"),
+    Assignment(id=10, title="ML Model Building", course_id=6, course_name="Machine Learning Intro", description="Build a simple ML model", due_date="2024-04-05", status="pending"),
 ]
+
+# Submissions: {assignment_id: [{user_id, content, file_url, submitted_at, is_late}]}
+submissions_db: dict[int, list] = {}
 
 # Endpoints
 @app.get("/api/courses")
@@ -721,6 +744,152 @@ def enroll_course(course_id: int, user_id: int = 1):
 @app.get("/api/users/{user_id}")
 def get_user(user_id: int):
     return next((u for u in users if u.id == user_id), None)
+
+# Assignment System Endpoints
+@app.post("/api/assignments", status_code=201)
+def create_assignment(assignment: AssignmentCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Create a new assignment (instructor/admin only)"""
+    course = next((c for c in courses if c.id == assignment.course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    new_assignment = Assignment(
+        id=len(assignments) + 1,
+        title=assignment.title,
+        course_id=assignment.course_id,
+        course_name=course.title,
+        description=assignment.description,
+        due_date=assignment.due_date,
+        status="pending",
+        max_grade=assignment.max_grade
+    )
+    assignments.append(new_assignment)
+    return new_assignment
+
+@app.get("/api/assignments/{assignment_id}")
+def get_assignment(assignment_id: int):
+    """Get assignment details"""
+    assignment = next((a for a in assignments if a.id == assignment_id), None)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    return assignment
+
+@app.put("/api/assignments/{assignment_id}")
+def update_assignment(assignment_id: int, assignment: AssignmentCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Update an assignment (instructor/admin only)"""
+    existing = next((a for a in assignments if a.id == assignment_id), None)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    
+    course = next((c for c in courses if c.id == assignment.course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    existing.title = assignment.title
+    existing.course_id = assignment.course_id
+    existing.course_name = course.title
+    existing.description = assignment.description
+    existing.due_date = assignment.due_date
+    existing.max_grade = assignment.max_grade
+    return existing
+
+@app.delete("/api/assignments/{assignment_id}")
+def delete_assignment(assignment_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Delete an assignment (instructor/admin only)"""
+    assignment = next((a for a in assignments if a.id == assignment_id), None)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    assignments.remove(assignment)
+    return {"message": "Assignment deleted"}
+
+@app.post("/api/assignments/{assignment_id}/submit")
+def submit_assignment(assignment_id: int, submission: AssignmentSubmission, current_user: dict = Depends(get_current_user)):
+    """Submit an assignment"""
+    assignment = next((a for a in assignments if a.id == assignment_id), None)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    
+    # Check if late (more than 10% penalty)
+    due_date = datetime.strptime(assignment.due_date, "%Y-%m-%d")
+    submitted_at = datetime.now()
+    is_late = submitted_at > due_date
+    
+    submission_data = {
+        "user_id": current_user["id"],
+        "user_name": current_user["name"],
+        "content": submission.content,
+        "file_url": submission.file_url,
+        "submitted_at": submitted_at.strftime("%Y-%m-%d %H:%M"),
+        "is_late": is_late,
+        "grade": None,
+        "feedback": None
+    }
+    
+    if assignment_id not in submissions_db:
+        submissions_db[assignment_id] = []
+    
+    # Check for existing submission
+    existing = next((s for s in submissions_db[assignment_id] if s["user_id"] == current_user["id"]), None)
+    if existing:
+        existing.update(submission_data)
+    else:
+        submissions_db[assignment_id].append(submission_data)
+    
+    # Update assignment status
+    assignment.status = "submitted"
+    
+    return {**submission_data, "is_late": is_late, "message": "Assignment submitted successfully" + (" (LATE - 10% penalty will apply)" if is_late else "")}
+
+@app.get("/api/assignments/{assignment_id}/submissions")
+def get_submissions(assignment_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Get all submissions for an assignment (instructor/admin only)"""
+    assignment = next((a for a in assignments if a.id == assignment_id), None)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    
+    return submissions_db.get(assignment_id, [])
+
+@app.post("/api/assignments/{assignment_id}/grade")
+def grade_submission(assignment_id: int, user_id: int, grade_data: GradeSubmission, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Grade a submission (instructor/admin only)"""
+    assignment = next((a for a in assignments if a.id == assignment_id), None)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    
+    if assignment_id not in submissions_db:
+        raise HTTPException(status_code=404, detail="No submissions found")
+    
+    submission = next((s for s in submissions_db[assignment_id] if s["user_id"] == user_id), None)
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    
+    # Apply late penalty if applicable
+    final_grade = grade_data.grade
+    if submission["is_late"]:
+        final_grade = int(grade_data.grade * 0.9)  # 10% penalty
+    
+    submission["grade"] = final_grade
+    submission["feedback"] = grade_data.feedback
+    
+    # Update assignment grade if this is the first grade
+    if assignment.grade is None:
+        assignment.grade = final_grade
+        assignment.status = "graded"
+    
+    return {
+        "user_id": user_id,
+        "grade": final_grade,
+        "original_grade": grade_data.grade,
+        "late_penalty_applied": submission["is_late"],
+        "feedback": grade_data.feedback
+    }
+
+@app.get("/api/instructor/assignments")
+def get_instructor_assignments(current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Get all assignments for instructor's courses"""
+    instructor_courses = [c for c in courses if c.instructor.id == current_user["id"]]
+    course_ids = [c.id for c in instructor_courses]
+    return [a for a in assignments if a.course_id in course_ids]
 
 if __name__ == "__main__":
     import uvicorn
