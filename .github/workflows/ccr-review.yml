@@ -13,38 +13,40 @@ jobs:
     if: ${{ github.event.pull_request.draft == false && github.event.pull_request.head.repo.fork == false }}
     runs-on: ubuntu-latest
 
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout PR head
+        uses: actions/checkout@v5
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
+      - name: Debug changed files
+        run: git diff --name-status ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}
+    
       - name: Run CCR review action
-        uses: VanGoghCode/ccr-test@v1
+        uses: VanGoghCode/ccr-test@v1.0.9
         with:
           api-key: ${{ secrets.ASU_API_KEY }}
-          base-url: https://api-main.aiml.asu.edu/queryV2
-          model: gpt5_2
-          model-provider: openai
-          # Architecture guide:
-          # - single-pass: fastest + lowest cost; best for small PRs.
-          # - iterative: deeper step-by-step analysis; best for medium PRs.
-          # - parallel: broadest coverage + best for high-risk/large PRs.
-          architecture: single-pass
-          post-inline-comments: "true"
-          inline-comment-limit: "10"
           github-token: ${{ github.token }}
-          output-path: CCR.md
+          base-url: https://api-main.aiml.asu.edu/queryV2
+          model-provider: openai
+          model: gpt5_2
+          base-ref: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.sha }}
+          architecture: parallel
+          post-inline-comments: "true"
+          inline-comment-limit: "30"
+          inline-comment-mode: file-coverage
           include-globs: "**/*"
           exclude-globs: "node_modules/**,dist/**,coverage/**,.git/**"
-          max-files: "25"
-          max-context-chars: "20000"
-          temperature: "0.2"
-          request-timeout-ms: "120000"
-
+          output-path: CCR.md
+    
       - name: Upload CCR markdown report
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ccr-report-${{ github.run_id }}
           path: CCR.md
