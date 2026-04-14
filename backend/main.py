@@ -7,6 +7,7 @@ from passlib.context import CryptContext
 import jwt
 from datetime import datetime, timedelta
 from enum import Enum
+import secrets
 
 app = FastAPI()
 security = HTTPBearer()
@@ -186,6 +187,24 @@ class Reply(BaseModel):
 
 class ReplyCreate(BaseModel):
     content: str
+
+# Certificate Models
+class Certificate(BaseModel):
+    id: int
+    user_id: int
+    user_name: str
+    course_id: int
+    course_name: str
+    instructor_name: str
+    issued_at: str
+    verification_code: str
+    completion_date: str
+
+class CompletionCriteria(BaseModel):
+    min_progress: int = 100  # percentage
+    required_assignments: bool = False
+    required_quizzes: bool = False
+    min_quiz_score: int = 70  # percentage
 
 class User(BaseModel):
     id: int
@@ -468,6 +487,10 @@ discussion_posts: List[DiscussionPost] = []
 post_replies: dict[int, List[Reply]] = {}  # {post_id: [replies]}
 post_upvotes: dict[int, List[int]] = {}  # {post_id: [user_ids]}
 reply_upvotes: dict[int, List[int]] = {}  # {reply_id: [user_ids]}
+
+# Certificate data
+certificates: List[Certificate] = []
+course_completion_criteria: dict[int, CompletionCriteria] = {}  # {course_id: criteria}
 
 # Endpoints
 @app.get("/api/courses")
@@ -1313,6 +1336,133 @@ def delete_post(post_id: int, current_user: dict = Depends(get_current_user)):
         del post_upvotes[post_id]
     
     return {"message": "Post deleted"}
+
+# Certificate Generation Endpoints
+def generate_verification_code() -> str:
+    """Generate a unique 12-character verification code"""
+    return secrets.token_urlsafe(9)[:12].upper()
+
+def check_completion_criteria(user_id: int, course_id: int) -> tuple[bool, str]:
+    """Check if user meets course completion criteria"""
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        return False, "Course not found"
+    
+    criteria = course_completion_criteria.get(course_id, CompletionCriteria())
+    
+    # Check progress
+    user_progress = progress_db.get(user_id, {})
+    completed_lessons = user_progress.get(course_id, [])
+    total_lessons = sum(len(m.lessons) for m in course.modules)
+    progress_percent = int((len(completed_lessons) / total_lessons * 100) if total_lessons > 0 else 0)
+    
+    if progress_percent < criteria.min_progress:
+        return False, f"Need {criteria.min_progress}% progress (current: {progress_percent}%)"
+    
+    # Check assignments if required
+    if criteria.required_assignments:
+        course_assignments = [a for a in assignments if a.course_id == course_id]
+        if course_assignments:
+            user_submissions = []
+            for assignment in course_assignments:
+                subs = submissions_db.get(assignment.id, [])
+                user_sub = next((s for s in subs if s["user_id"] == user_id and s.get("grade") is not None), None)
+                if user_sub:
+                    user_submissions.append(user_sub)
+            
+            if len(user_submissions) < len(course_assignments):
+                return False, "All assignments must be completed and graded"
+    
+    # Check quizzes if required
+    if criteria.required_quizzes:
+        course_quizzes = [q for q in quizzes if q.course_id == course_id]
+        if course_quizzes:
+            passed_quizzes = 0
+            for quiz in course_quizzes:
+                attempts = quiz_attempts_db.get(quiz.id, [])
+                user_attempts = [a for a in attempts if a["user_id"] == user_id]
+                if user_attempts:
+                    best_attempt = max(user_attempts, key=lambda x: x["percentage"])
+                    if best_attempt["percentage"] >= criteria.min_quiz_score:
+                        passed_quizzes += 1
+            
+            if passed_quizzes < len(course_quizzes):
+                return False, f"Must pass all quizzes with {criteria.min_quiz_score}% or higher"
+    
+    return True, "All criteria met"
+
+@app.post("/api/courses/{course_id}/certificate", status_code=201)
+def generate_certificate(course_id: int, current_user: dict = Depends(get_current_user)):
+    """Generate a certificate for course completion"""
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    # Check if already has certificate
+    existing = next((cert for cert in certificates if cert.user_id == current_user["id"] and cert.course_id == course_id), None)
+    if existing:
+        return existing
+    
+    # Check completion criteria
+    meets_criteria, message = check_completion_criteria(current_user["id"], course_id)
+    if not meets_criteria:
+        raise HTTPException(status_code=400, detail=f"Course not completed: {message}")
+    
+    # Generate certificate
+    new_cert = Certificate(
+        id=len(certificates) + 1,
+        user_id=current_user["id"],
+        user_name=current_user["name"],
+        course_id=course_id,
+        course_name=course.title,
+        instructor_name=course.instructor.name,
+        issued_at=datetime.now().strftime("%Y-%m-%d"),
+        verification_code=generate_verification_code(),
+        completion_date=datetime.now().strftime("%Y-%m-%d")
+    )
+    certificates.append(new_cert)
+    return new_cert
+
+@app.get("/api/users/{user_id}/certificates")
+def get_user_certificates(user_id: int, current_user: dict = Depends(get_current_user)):
+    """Get all certificates for a user"""
+    if current_user["id"] != user_id and current_user["role"] != Role.ADMIN:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    return [cert for cert in certificates if cert.user_id == user_id]
+
+@app.get("/api/certificates/verify/{verification_code}")
+def verify_certificate(verification_code: str):
+    """Verify a certificate by its verification code"""
+    cert = next((c for c in certificates if c.verification_code == verification_code), None)
+    if not cert:
+        raise HTTPException(status_code=404, detail="Certificate not found")
+    return cert
+
+@app.get("/api/courses/{course_id}/completion-status")
+def get_completion_status(course_id: int, current_user: dict = Depends(get_current_user)):
+    """Check if user can generate certificate"""
+    meets_criteria, message = check_completion_criteria(current_user["id"], course_id)
+    
+    # Check if already has certificate
+    has_certificate = any(cert.user_id == current_user["id"] and cert.course_id == course_id for cert in certificates)
+    
+    return {
+        "can_generate": meets_criteria and not has_certificate,
+        "has_certificate": has_certificate,
+        "message": message,
+        "criteria": course_completion_criteria.get(course_id, CompletionCriteria()).dict()
+    }
+
+@app.put("/api/courses/{course_id}/completion-criteria")
+def set_completion_criteria(course_id: int, criteria: CompletionCriteria, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Set completion criteria for a course (instructor/admin only)"""
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    course_completion_criteria[course_id] = criteria
+    return criteria
 
 if __name__ == "__main__":
     import uvicorn
