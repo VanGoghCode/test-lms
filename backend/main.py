@@ -37,11 +37,16 @@ class Lesson(BaseModel):
     id: int
     title: str
     duration: str
+    video_url: Optional[str] = None
 
 class Module(BaseModel):
     id: int
     title: str
     lessons: List[Lesson]
+
+class CourseStatus(str, Enum):
+    DRAFT = "draft"
+    PUBLISHED = "published"
 
 class Course(BaseModel):
     id: int
@@ -52,6 +57,7 @@ class Course(BaseModel):
     thumbnail: str
     duration: str
     modules: List[Module]
+    status: CourseStatus = CourseStatus.DRAFT
 
 class Enrollment(BaseModel):
     id: int
@@ -60,14 +66,94 @@ class Enrollment(BaseModel):
     progress: int
     enrolled_at: str
 
+# Progress Tracking Models
+class LessonProgress(BaseModel):
+    lesson_id: int
+    completed: bool = False
+
+class CourseProgress(BaseModel):
+    course_id: int
+    completed_lessons: List[int] = []
+
+class ProgressUpdate(BaseModel):
+    lesson_id: int
+    completed: bool
+
 class Assignment(BaseModel):
     id: int
     title: str
     course_id: int
     course_name: str
+    description: str
     due_date: str
     status: str
+    max_grade: int = 100
     grade: Optional[int] = None
+    feedback: Optional[str] = None
+
+# Assignment System Models
+class AssignmentCreate(BaseModel):
+    title: str
+    course_id: int
+    description: str
+    due_date: str
+    max_grade: int = 100
+
+class AssignmentSubmission(BaseModel):
+    assignment_id: int
+    content: str
+    file_url: Optional[str] = None
+
+class GradeSubmission(BaseModel):
+    grade: int
+    feedback: Optional[str] = None
+
+# Quiz/Exam Models
+class QuestionType(str, Enum):
+    MULTIPLE_CHOICE = "multiple_choice"
+    TRUE_FALSE = "true_false"
+    SHORT_ANSWER = "short_answer"
+
+class QuizQuestion(BaseModel):
+    id: int
+    question: str
+    type: QuestionType
+    options: Optional[List[str]] = None  # For multiple choice
+    correct_answer: str
+    points: int = 1
+
+class Quiz(BaseModel):
+    id: int
+    title: str
+    course_id: int
+    course_name: str
+    description: str
+    time_limit: Optional[int] = None  # in minutes
+    questions: List[QuizQuestion]
+    total_points: int
+    passing_score: int
+
+class QuizCreate(BaseModel):
+    title: str
+    course_id: int
+    description: str
+    time_limit: Optional[int] = None
+    passing_score: int = 70
+
+class QuestionCreate(BaseModel):
+    question: str
+    type: QuestionType
+    options: Optional[List[str]] = None
+    correct_answer: str
+    points: int = 1
+
+class QuizAnswer(BaseModel):
+    question_id: int
+    answer: str
+
+class QuizSubmission(BaseModel):
+    quiz_id: int
+    answers: List[QuizAnswer]
 
 class User(BaseModel):
     id: int
@@ -178,6 +264,32 @@ def login(credentials: UserLogin):
 @app.get("/api/auth/me")
 def get_me(current_user: dict = Depends(get_current_user)):
     return current_user
+
+# Course Management Models
+class LessonCreate(BaseModel):
+    title: str
+    duration: str
+    video_url: Optional[str] = None
+
+class ModuleCreate(BaseModel):
+    title: str
+    lessons: List[LessonCreate] = []
+
+class CourseCreate(BaseModel):
+    title: str
+    description: str
+    category: str
+    thumbnail: str
+    duration: str
+    modules: List[ModuleCreate] = []
+
+class CourseUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    thumbnail: Optional[str] = None
+    duration: Optional[str] = None
+    modules: Optional[List[ModuleCreate]] = None
 
 # Mock Data
 instructors = [
@@ -294,18 +406,30 @@ enrollments = [
     Enrollment(id=3, course_id=5, user_id=1, progress=80, enrolled_at="2024-01-20"),
 ]
 
+# Progress tracking: {user_id: {course_id: [completed_lesson_ids]}}
+progress_db: dict[int, dict[int, List[int]]] = {}
+
 assignments = [
-    Assignment(id=1, title="Python Basics Quiz", course_id=1, course_name="Python Fundamentals", due_date="2024-03-15", status="graded", grade=92),
-    Assignment(id=2, title="Functions Assignment", course_id=1, course_name="Python Fundamentals", due_date="2024-03-20", status="submitted"),
-    Assignment(id=3, title="JavaScript Project", course_id=2, course_name="JavaScript Essentials", due_date="2024-03-25", status="pending"),
-    Assignment(id=4, title="Design Critique", course_id=3, course_name="UI Design Principles", due_date="2024-03-18", status="graded", grade=88),
-    Assignment(id=5, title="Figma Wireframe", course_id=4, course_name="Figma Masterclass", due_date="2024-03-22", status="pending"),
-    Assignment(id=6, title="Data Analysis Report", course_id=5, course_name="Data Science with Python", due_date="2024-03-28", status="pending"),
-    Assignment(id=7, title="OOP Exercise", course_id=1, course_name="Python Fundamentals", due_date="2024-03-10", status="graded", grade=85),
-    Assignment(id=8, title="Color Palette Design", course_id=3, course_name="UI Design Principles", due_date="2024-03-12", status="submitted"),
-    Assignment(id=9, title="Pandas Practice", course_id=5, course_name="Data Science with Python", due_date="2024-03-30", status="pending"),
-    Assignment(id=10, title="ML Model Building", course_id=6, course_name="Machine Learning Intro", due_date="2024-04-05", status="pending"),
+    Assignment(id=1, title="Python Basics Quiz", course_id=1, course_name="Python Fundamentals", description="Complete the quiz on Python basics", due_date="2024-03-15", status="graded", grade=92),
+    Assignment(id=2, title="Functions Assignment", course_id=1, course_name="Python Fundamentals", description="Write functions to solve the given problems", due_date="2024-03-20", status="submitted"),
+    Assignment(id=3, title="JavaScript Project", course_id=2, course_name="JavaScript Essentials", description="Build a simple to-do app", due_date="2024-03-25", status="pending"),
+    Assignment(id=4, title="Design Critique", course_id=3, course_name="UI Design Principles", description="Critique the provided design", due_date="2024-03-18", status="graded", grade=88),
+    Assignment(id=5, title="Figma Wireframe", course_id=4, course_name="Figma Masterclass", description="Create a wireframe for a mobile app", due_date="2024-03-22", status="pending"),
+    Assignment(id=6, title="Data Analysis Report", course_id=5, course_name="Data Science with Python", description="Analyze the provided dataset", due_date="2024-03-28", status="pending"),
+    Assignment(id=7, title="OOP Exercise", course_id=1, course_name="Python Fundamentals", description="Implement a class hierarchy", due_date="2024-03-10", status="graded", grade=85),
+    Assignment(id=8, title="Color Palette Design", course_id=3, course_name="UI Design Principles", description="Design a color palette", due_date="2024-03-12", status="submitted"),
+    Assignment(id=9, title="Pandas Practice", course_id=5, course_name="Data Science with Python", description="Complete pandas exercises", due_date="2024-03-30", status="pending"),
+    Assignment(id=10, title="ML Model Building", course_id=6, course_name="Machine Learning Intro", description="Build a simple ML model", due_date="2024-04-05", status="pending"),
 ]
+
+# Submissions: {assignment_id: [{user_id, content, file_url, submitted_at, is_late}]}
+submissions_db: dict[int, list] = {}
+
+# Quiz data
+quizzes: List[Quiz] = []
+
+# Quiz attempts: {quiz_id: [{user_id, answers, score, submitted_at, time_taken}]}
+quiz_attempts_db: dict[int, list] = {}
 
 # Endpoints
 @app.get("/api/courses")
@@ -320,6 +444,326 @@ def get_courses(category: str = None, search: str = None):
 @app.get("/api/courses/{course_id}")
 def get_course(course_id: int):
     return next((c for c in courses if c.id == course_id), None)
+
+# Instructor Course Management
+@app.post("/api/courses", status_code=201)
+def create_course(course_data: CourseCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course_id = len(courses) + 1
+    
+    # Convert module/lesson creation to proper objects
+    modules = []
+    for m_idx, m in enumerate(course_data.modules):
+        lessons = []
+        for l_idx, l in enumerate(m.lessons):
+            lessons.append(Lesson(
+                id=m_idx * 100 + l_idx + 1,
+                title=l.title,
+                duration=l.duration,
+                video_url=l.video_url
+            ))
+        modules.append(Module(
+            id=m_idx + 1,
+            title=m.title,
+            lessons=lessons
+        ))
+    
+    new_course = Course(
+        id=course_id,
+        title=course_data.title,
+        description=course_data.description,
+        instructor=Instructor(id=current_user["id"], name=current_user["name"], avatar=current_user["avatar"]),
+        category=course_data.category,
+        thumbnail=course_data.thumbnail,
+        duration=course_data.duration,
+        modules=modules,
+        status=CourseStatus.DRAFT
+    )
+    courses.append(new_course)
+    return new_course
+
+@app.put("/api/courses/{course_id}")
+def update_course(course_id: int, course_data: CourseUpdate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    # Check ownership for instructors (admins can edit any)
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this course")
+    
+    if course_data.title is not None:
+        course.title = course_data.title
+    if course_data.description is not None:
+        course.description = course_data.description
+    if course_data.category is not None:
+        course.category = course_data.category
+    if course_data.thumbnail is not None:
+        course.thumbnail = course_data.thumbnail
+    if course_data.duration is not None:
+        course.duration = course_data.duration
+    if course_data.modules is not None:
+        modules = []
+        for m_idx, m in enumerate(course_data.modules):
+            lessons = []
+            for l_idx, l in enumerate(m.lessons):
+                lessons.append(Lesson(
+                    id=m_idx * 100 + l_idx + 1,
+                    title=l.title,
+                    duration=l.duration,
+                    video_url=l.video_url
+                ))
+            modules.append(Module(id=m_idx + 1, title=m.title, lessons=lessons))
+        course.modules = modules
+    
+    return course
+
+@app.delete("/api/courses/{course_id}")
+def delete_course(course_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this course")
+    
+    courses.remove(course)
+    return {"message": "Course deleted"}
+
+@app.post("/api/courses/{course_id}/publish")
+def publish_course(course_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to publish this course")
+    
+    course.status = CourseStatus.PUBLISHED
+    return course
+
+@app.post("/api/courses/{course_id}/unpublish")
+def unpublish_course(course_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to unpublish this course")
+    
+    course.status = CourseStatus.DRAFT
+    return course
+
+# Module CRUD
+@app.post("/api/courses/{course_id}/modules")
+def add_module(course_id: int, module: ModuleCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this course")
+    
+    module_id = len(course.modules) + 1
+    lessons = [
+        Lesson(id=module_id * 100 + i + 1, title=l.title, duration=l.duration, video_url=l.video_url)
+        for i, l in enumerate(module.lessons)
+    ]
+    new_module = Module(id=module_id, title=module.title, lessons=lessons)
+    course.modules.append(new_module)
+    return new_module
+
+@app.put("/api/courses/{course_id}/modules/{module_id}")
+def update_module(course_id: int, module_id: int, module: ModuleCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this course")
+    
+    existing_module = next((m for m in course.modules if m.id == module_id), None)
+    if not existing_module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    
+    lessons = [
+        Lesson(id=module_id * 100 + i + 1, title=l.title, duration=l.duration, video_url=l.video_url)
+        for i, l in enumerate(module.lessons)
+    ]
+    existing_module.title = module.title
+    existing_module.lessons = lessons
+    return existing_module
+
+@app.delete("/api/courses/{course_id}/modules/{module_id}")
+def delete_module(course_id: int, module_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this course")
+    
+    module = next((m for m in course.modules if m.id == module_id), None)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    
+    course.modules.remove(module)
+    return {"message": "Module deleted"}
+
+# Lesson CRUD
+@app.post("/api/courses/{course_id}/modules/{module_id}/lessons")
+def add_lesson(course_id: int, module_id: int, lesson: LessonCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this course")
+    
+    module = next((m for m in course.modules if m.id == module_id), None)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    
+    lesson_id = len(module.lessons) + 1
+    new_lesson = Lesson(id=lesson_id, title=lesson.title, duration=lesson.duration, video_url=lesson.video_url)
+    module.lessons.append(new_lesson)
+    return new_lesson
+
+@app.put("/api/courses/{course_id}/modules/{module_id}/lessons/{lesson_id}")
+def update_lesson(course_id: int, module_id: int, lesson_id: int, lesson: LessonCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this course")
+    
+    module = next((m for m in course.modules if m.id == module_id), None)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    
+    existing_lesson = next((l for l in module.lessons if l.id == lesson_id), None)
+    if not existing_lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    
+    existing_lesson.title = lesson.title
+    existing_lesson.duration = lesson.duration
+    existing_lesson.video_url = lesson.video_url
+    return existing_lesson
+
+@app.delete("/api/courses/{course_id}/modules/{module_id}/lessons/{lesson_id}")
+def delete_lesson(course_id: int, module_id: int, lesson_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    if current_user["role"] != Role.ADMIN and course.instructor.id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this course")
+    
+    module = next((m for m in course.modules if m.id == module_id), None)
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    
+    lesson = next((l for l in module.lessons if l.id == lesson_id), None)
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    
+    module.lessons.remove(lesson)
+    return {"message": "Lesson deleted"}
+
+# Get instructor's courses
+@app.get("/api/instructor/courses")
+def get_instructor_courses(current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    return [c for c in courses if c.instructor.id == current_user["id"]]
+
+# Progress Tracking Endpoints
+@app.get("/api/courses/{course_id}/progress")
+def get_course_progress(course_id: int, current_user: dict = Depends(get_current_user)):
+    """Get user's progress for a specific course"""
+    user_progress = progress_db.get(current_user["id"], {})
+    completed_lessons = user_progress.get(course_id, [])
+    
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    # Calculate total lessons
+    total_lessons = sum(len(m.lessons) for m in course.modules)
+    progress_percent = int((len(completed_lessons) / total_lessons * 100) if total_lessons > 0 else 0)
+    
+    return {
+        "course_id": course_id,
+        "completed_lessons": completed_lessons,
+        "total_lessons": total_lessons,
+        "progress_percent": progress_percent
+    }
+
+@app.post("/api/courses/{course_id}/progress")
+def update_lesson_progress(course_id: int, progress: ProgressUpdate, current_user: dict = Depends(get_current_user)):
+    """Update completion status for a lesson"""
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    # Verify lesson exists
+    lesson_exists = any(
+        any(l.id == progress.lesson_id for l in m.lessons)
+        for m in course.modules
+    )
+    if not lesson_exists:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+    
+    # Initialize user progress if needed
+    if current_user["id"] not in progress_db:
+        progress_db[current_user["id"]] = {}
+    if course_id not in progress_db[current_user["id"]]:
+        progress_db[current_user["id"]][course_id] = []
+    
+    user_course_progress = progress_db[current_user["id"]][course_id]
+    
+    if progress.completed and progress.lesson_id not in user_course_progress:
+        user_course_progress.append(progress.lesson_id)
+    elif not progress.completed and progress.lesson_id in user_course_progress:
+        user_course_progress.remove(progress.lesson_id)
+    
+    # Recalculate progress percentage
+    total_lessons = sum(len(m.lessons) for m in course.modules)
+    progress_percent = int((len(user_course_progress) / total_lessons * 100) if total_lessons > 0 else 0)
+    
+    # Update enrollment progress
+    enrollment = next((e for e in enrollments if e.course_id == course_id and e.user_id == current_user["id"]), None)
+    if enrollment:
+        enrollment.progress = progress_percent
+    
+    return {
+        "course_id": course_id,
+        "completed_lessons": user_course_progress,
+        "total_lessons": total_lessons,
+        "progress_percent": progress_percent
+    }
+
+@app.get("/api/users/{user_id}/progress")
+def get_user_all_progress(user_id: int, current_user: dict = Depends(get_current_user)):
+    """Get all progress for a user"""
+    if current_user["id"] != user_id and current_user["role"] != Role.ADMIN:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    user_progress = progress_db.get(user_id, {})
+    result = []
+    
+    for course_id, completed_lessons in user_progress.items():
+        course = next((c for c in courses if c.id == course_id), None)
+        if course:
+            total_lessons = sum(len(m.lessons) for m in course.modules)
+            progress_percent = int((len(completed_lessons) / total_lessons * 100) if total_lessons > 0 else 0)
+            result.append({
+                "course_id": course_id,
+                "course_title": course.title,
+                "completed_lessons": completed_lessons,
+                "total_lessons": total_lessons,
+                "progress_percent": progress_percent
+            })
+    
+    return result
 
 @app.get("/api/users/{user_id}/enrollments")
 def get_enrollments(user_id: int, current_user: dict = Depends(get_current_user)):
@@ -353,6 +797,336 @@ def enroll_course(course_id: int, user_id: int = 1):
 @app.get("/api/users/{user_id}")
 def get_user(user_id: int):
     return next((u for u in users if u.id == user_id), None)
+
+# Assignment System Endpoints
+@app.post("/api/assignments", status_code=201)
+def create_assignment(assignment: AssignmentCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Create a new assignment (instructor/admin only)"""
+    course = next((c for c in courses if c.id == assignment.course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    new_assignment = Assignment(
+        id=len(assignments) + 1,
+        title=assignment.title,
+        course_id=assignment.course_id,
+        course_name=course.title,
+        description=assignment.description,
+        due_date=assignment.due_date,
+        status="pending",
+        max_grade=assignment.max_grade
+    )
+    assignments.append(new_assignment)
+    return new_assignment
+
+@app.get("/api/assignments/{assignment_id}")
+def get_assignment(assignment_id: int):
+    """Get assignment details"""
+    assignment = next((a for a in assignments if a.id == assignment_id), None)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    return assignment
+
+@app.put("/api/assignments/{assignment_id}")
+def update_assignment(assignment_id: int, assignment: AssignmentCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Update an assignment (instructor/admin only)"""
+    existing = next((a for a in assignments if a.id == assignment_id), None)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    
+    course = next((c for c in courses if c.id == assignment.course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    existing.title = assignment.title
+    existing.course_id = assignment.course_id
+    existing.course_name = course.title
+    existing.description = assignment.description
+    existing.due_date = assignment.due_date
+    existing.max_grade = assignment.max_grade
+    return existing
+
+@app.delete("/api/assignments/{assignment_id}")
+def delete_assignment(assignment_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Delete an assignment (instructor/admin only)"""
+    assignment = next((a for a in assignments if a.id == assignment_id), None)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    assignments.remove(assignment)
+    return {"message": "Assignment deleted"}
+
+@app.post("/api/assignments/{assignment_id}/submit")
+def submit_assignment(assignment_id: int, submission: AssignmentSubmission, current_user: dict = Depends(get_current_user)):
+    """Submit an assignment"""
+    assignment = next((a for a in assignments if a.id == assignment_id), None)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    
+    # Check if late (more than 10% penalty)
+    due_date = datetime.strptime(assignment.due_date, "%Y-%m-%d")
+    submitted_at = datetime.now()
+    is_late = submitted_at > due_date
+    
+    submission_data = {
+        "user_id": current_user["id"],
+        "user_name": current_user["name"],
+        "content": submission.content,
+        "file_url": submission.file_url,
+        "submitted_at": submitted_at.strftime("%Y-%m-%d %H:%M"),
+        "is_late": is_late,
+        "grade": None,
+        "feedback": None
+    }
+    
+    if assignment_id not in submissions_db:
+        submissions_db[assignment_id] = []
+    
+    # Check for existing submission
+    existing = next((s for s in submissions_db[assignment_id] if s["user_id"] == current_user["id"]), None)
+    if existing:
+        existing.update(submission_data)
+    else:
+        submissions_db[assignment_id].append(submission_data)
+    
+    # Update assignment status
+    assignment.status = "submitted"
+    
+    return {**submission_data, "is_late": is_late, "message": "Assignment submitted successfully" + (" (LATE - 10% penalty will apply)" if is_late else "")}
+
+@app.get("/api/assignments/{assignment_id}/submissions")
+def get_submissions(assignment_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Get all submissions for an assignment (instructor/admin only)"""
+    assignment = next((a for a in assignments if a.id == assignment_id), None)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    
+    return submissions_db.get(assignment_id, [])
+
+@app.post("/api/assignments/{assignment_id}/grade")
+def grade_submission(assignment_id: int, user_id: int, grade_data: GradeSubmission, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Grade a submission (instructor/admin only)"""
+    assignment = next((a for a in assignments if a.id == assignment_id), None)
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    
+    if assignment_id not in submissions_db:
+        raise HTTPException(status_code=404, detail="No submissions found")
+    
+    submission = next((s for s in submissions_db[assignment_id] if s["user_id"] == user_id), None)
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    
+    # Apply late penalty if applicable
+    final_grade = grade_data.grade
+    if submission["is_late"]:
+        final_grade = int(grade_data.grade * 0.9)  # 10% penalty
+    
+    submission["grade"] = final_grade
+    submission["feedback"] = grade_data.feedback
+    
+    # Update assignment grade if this is the first grade
+    if assignment.grade is None:
+        assignment.grade = final_grade
+        assignment.status = "graded"
+    
+    return {
+        "user_id": user_id,
+        "grade": final_grade,
+        "original_grade": grade_data.grade,
+        "late_penalty_applied": submission["is_late"],
+        "feedback": grade_data.feedback
+    }
+
+@app.get("/api/instructor/assignments")
+def get_instructor_assignments(current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Get all assignments for instructor's courses"""
+    instructor_courses = [c for c in courses if c.instructor.id == current_user["id"]]
+    course_ids = [c.id for c in instructor_courses]
+    return [a for a in assignments if a.course_id in course_ids]
+
+# Quiz/Exam Endpoints
+@app.post("/api/quizzes", status_code=201)
+def create_quiz(quiz_data: QuizCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Create a new quiz (instructor/admin only)"""
+    course = next((c for c in courses if c.id == quiz_data.course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    new_quiz = Quiz(
+        id=len(quizzes) + 1,
+        title=quiz_data.title,
+        course_id=quiz_data.course_id,
+        course_name=course.title,
+        description=quiz_data.description,
+        time_limit=quiz_data.time_limit,
+        questions=[],
+        total_points=0,
+        passing_score=quiz_data.passing_score
+    )
+    quizzes.append(new_quiz)
+    return new_quiz
+
+@app.get("/api/quizzes/{quiz_id}")
+def get_quiz(quiz_id: int, current_user: dict = Depends(get_current_user)):
+    """Get quiz details"""
+    quiz = next((q for q in quizzes if q.id == quiz_id), None)
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    return quiz
+
+@app.get("/api/quizzes/{quiz_id}/questions")
+def get_quiz_questions(quiz_id: int, current_user: dict = Depends(get_current_user)):
+    """Get quiz questions (without correct answers for students)"""
+    quiz = next((q for q in quizzes if q.id == quiz_id), None)
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    
+    # For students, hide correct answers
+    if current_user["role"] == Role.STUDENT:
+        questions = []
+        for q in quiz.questions:
+            q_dict = q.dict()
+            q_dict.pop("correct_answer")
+            questions.append(q_dict)
+        return questions
+    
+    return quiz.questions
+
+@app.post("/api/quizzes/{quiz_id}/questions")
+def add_question(quiz_id: int, question: QuestionCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Add a question to a quiz (instructor/admin only)"""
+    quiz = next((q for q in quizzes if q.id == quiz_id), None)
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    
+    new_question = QuizQuestion(
+        id=len(quiz.questions) + 1,
+        question=question.question,
+        type=question.type,
+        options=question.options,
+        correct_answer=question.correct_answer,
+        points=question.points
+    )
+    quiz.questions.append(new_question)
+    quiz.total_points += question.points
+    return new_question
+
+@app.put("/api/quizzes/{quiz_id}/questions/{question_id}")
+def update_question(quiz_id: int, question_id: int, question: QuestionCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Update a quiz question (instructor/admin only)"""
+    quiz = next((q for q in quizzes if q.id == quiz_id), None)
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    
+    existing = next((q for q in quiz.questions if q.id == question_id), None)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Question not found")
+    
+    # Update total points
+    quiz.total_points -= existing.points
+    quiz.total_points += question.points
+    
+    existing.question = question.question
+    existing.type = question.type
+    existing.options = question.options
+    existing.correct_answer = question.correct_answer
+    existing.points = question.points
+    return existing
+
+@app.delete("/api/quizzes/{quiz_id}/questions/{question_id}")
+def delete_question(quiz_id: int, question_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Delete a quiz question (instructor/admin only)"""
+    quiz = next((q for q in quizzes if q.id == quiz_id), None)
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    
+    question = next((q for q in quiz.questions if q.id == question_id), None)
+    if not question:
+        raise HTTPException(status_code=404, detail="Question not found")
+    
+    quiz.total_points -= question.points
+    quiz.questions.remove(question)
+    return {"message": "Question deleted"}
+
+@app.post("/api/quizzes/{quiz_id}/submit")
+def submit_quiz(quiz_id: int, submission: QuizSubmission, current_user: dict = Depends(get_current_user)):
+    """Submit quiz answers and get auto-graded results"""
+    quiz = next((q for q in quizzes if q.id == quiz_id), None)
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    
+    # Calculate score
+    score = 0
+    total_points = 0
+    results = []
+    
+    for answer in submission.answers:
+        question = next((q for q in quiz.questions if q.id == answer.question_id), None)
+        if question:
+            total_points += question.points
+            is_correct = answer.answer.strip().lower() == question.correct_answer.strip().lower()
+            if is_correct:
+                score += question.points
+            results.append({
+                "question_id": answer.question_id,
+                "question": question.question,
+                "your_answer": answer.answer,
+                "correct_answer": question.correct_answer,
+                "is_correct": is_correct,
+                "points": question.points if is_correct else 0
+            })
+    
+    percentage = int((score / total_points * 100) if total_points > 0 else 0)
+    passed = percentage >= quiz.passing_score
+    
+    # Store attempt
+    attempt = {
+        "user_id": current_user["id"],
+        "user_name": current_user["name"],
+        "score": score,
+        "total_points": total_points,
+        "percentage": percentage,
+        "passed": passed,
+        "submitted_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "results": results
+    }
+    
+    if quiz_id not in quiz_attempts_db:
+        quiz_attempts_db[quiz_id] = []
+    quiz_attempts_db[quiz_id].append(attempt)
+    
+    return {
+        "score": score,
+        "total_points": total_points,
+        "percentage": percentage,
+        "passed": passed,
+        "passing_score": quiz.passing_score,
+        "results": results
+    }
+
+@app.get("/api/quizzes/{quiz_id}/attempts")
+def get_quiz_attempts(quiz_id: int, current_user: dict = Depends(get_current_user)):
+    """Get user's quiz attempts"""
+    attempts = quiz_attempts_db.get(quiz_id, [])
+    user_attempts = [a for a in attempts if a["user_id"] == current_user["id"]]
+    return user_attempts
+
+@app.get("/api/quizzes/{quiz_id}/all-attempts")
+def get_all_attempts(quiz_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Get all attempts for a quiz (instructor/admin only)"""
+    return quiz_attempts_db.get(quiz_id, [])
+
+@app.get("/api/courses/{course_id}/quizzes")
+def get_course_quizzes(course_id: int):
+    """Get all quizzes for a course"""
+    return [q for q in quizzes if q.course_id == course_id]
+
+@app.get("/api/instructor/quizzes")
+def get_instructor_quizzes(current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Get all quizzes for instructor's courses"""
+    instructor_courses = [c for c in courses if c.instructor.id == current_user["id"]]
+    course_ids = [c.id for c in instructor_courses]
+    return [q for q in quizzes if q.course_id in course_ids]
 
 if __name__ == "__main__":
     import uvicorn
