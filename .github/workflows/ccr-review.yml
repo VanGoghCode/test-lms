@@ -1,9 +1,21 @@
+# ── CCR Review ─────────────────────────────────────────────────────────
+# Automated code-review using the Critical Code Reviewer GitHub Action.
+# Copy this file into .github/workflows/ in the target repository.
+
 name: CCR Review
 
 # ── Trigger on PR events ──────────────────────────────────────────────
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+
+# ── Concurrency ───────────────────────────────────────────────────────
+# Only one review per PR at a time. If a new push lands while a review
+# is still running, the older run is cancelled automatically if "cancel-in-progress is set to true". This
+# avoids burning API quota on stale diffs.
+concurrency:
+  group: ccr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
 
 # ── Required permissions ──────────────────────────────────────────────
 permissions:
@@ -17,14 +29,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Checkout is optional for pull_request events — the action fetches
-      # files through the GitHub PR API. Include it only if you need local
-      # git operations or are using explicit base-ref/head-ref.
+      # ── Checkout ────────────────────────────────────────────────────
+      # Optional for pull_request events — the action fetches most file
+      # data through the GitHub PR API. Include checkout only if you
+      # need local git operations or are using explicit base-ref/head-ref.
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0    # full history needed for local git diff
 
+      # ── Run CCR review ──────────────────────────────────────────────
       - name: Run CCR review
         uses: VanGoghCode/critical-code-reviewer@main
         with:
@@ -65,7 +79,7 @@ jobs:
 
           # Cap on inline comments per run to avoid noisy PRs.
           # Default: "10"
-          inline-comment-limit: "10"
+          inline-comment-limit: "25"
 
           # Strategy for placing inline comments:
           #   findings      — one comment per finding (may cluster)
@@ -85,12 +99,12 @@ jobs:
           # ── Payload limits ────────────────────────────────────────
           # Maximum number of changed files to send to the LLM.
           # Default: "25"
-          max-files: "25"
+          max-files: "30"
 
           # Total character budget for file context in the prompt.
           # Higher = more context but slower and more expensive.
           # Default: "12000"
-          max-context-chars: "20000"
+          max-context-chars: "40000"
 
           # ── Model tuning ──────────────────────────────────────────
           # Sampling temperature — lower is more deterministic.
@@ -101,11 +115,6 @@ jobs:
           # Increase for large PRs or slow models.
           # Default: "120000" (2 minutes)
           request-timeout-ms: "180000"
-
-          # ── Output ────────────────────────────────────────────────
-          # Path where the CCR markdown report is written.
-          # Default: CCR.md
-          output-path: CCR.md
 
           # ── Custom prompts ────────────────────────────────────────
           # Directory containing architecture manifests and prompt files.
@@ -119,13 +128,3 @@ jobs:
           # Default: inferred from PR event or HEAD~1 / HEAD
           # base-ref: ${{ github.event.pull_request.base.sha }}
           # head-ref: ${{ github.event.pull_request.head.sha }}
-
-      # Upload the report as a workflow artifact so it's downloadable
-      # even if the review step fails.
-      - name: Upload CCR report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ccr-report-${{ github.run_id }}
-          path: CCR.md
-          if-no-files-found: ignore

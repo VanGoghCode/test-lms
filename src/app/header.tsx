@@ -19,6 +19,7 @@ export function Header() {
           <a href="/courses">Courses</a>
           {user && <a href="/my-learning">My Learning</a>}
           {user && <a href="/assignments">Assignments</a>}
+          {user && <a href="/certificates">Certificates</a>}
           {(user?.role === 'instructor' || user?.role === 'admin') && (
             <>
               <a href="/instructor">Instructor</a>

@@ -7,6 +7,7 @@ from passlib.context import CryptContext
 import jwt
 from datetime import datetime, timedelta
 from enum import Enum
+import secrets
 
 app = FastAPI()
 security = HTTPBearer()
@@ -154,6 +155,56 @@ class QuizAnswer(BaseModel):
 class QuizSubmission(BaseModel):
     quiz_id: int
     answers: List[QuizAnswer]
+
+# Discussion Forum Models
+class DiscussionPost(BaseModel):
+    id: int
+    course_id: int
+    user_id: int
+    user_name: str
+    user_avatar: str
+    title: str
+    content: str
+    created_at: str
+    upvotes: int = 0
+    is_pinned: bool = False
+    reply_count: int = 0
+
+class PostCreate(BaseModel):
+    course_id: int
+    title: str
+    content: str
+
+class Reply(BaseModel):
+    id: int
+    post_id: int
+    user_id: int
+    user_name: str
+    user_avatar: str
+    content: str
+    created_at: str
+    upvotes: int = 0
+
+class ReplyCreate(BaseModel):
+    content: str
+
+# Certificate Models
+class Certificate(BaseModel):
+    id: int
+    user_id: int
+    user_name: str
+    course_id: int
+    course_name: str
+    instructor_name: str
+    issued_at: str
+    verification_code: str
+    completion_date: str
+
+class CompletionCriteria(BaseModel):
+    min_progress: int = 100  # percentage
+    required_assignments: bool = False
+    required_quizzes: bool = False
+    min_quiz_score: int = 70  # percentage
 
 class User(BaseModel):
     id: int
@@ -430,6 +481,16 @@ quizzes: List[Quiz] = []
 
 # Quiz attempts: {quiz_id: [{user_id, answers, score, submitted_at, time_taken}]}
 quiz_attempts_db: dict[int, list] = {}
+
+# Discussion Forum data
+discussion_posts: List[DiscussionPost] = []
+post_replies: dict[int, List[Reply]] = {}  # {post_id: [replies]}
+post_upvotes: dict[int, List[int]] = {}  # {post_id: [user_ids]}
+reply_upvotes: dict[int, List[int]] = {}  # {reply_id: [user_ids]}
+
+# Certificate data
+certificates: List[Certificate] = []
+course_completion_criteria: dict[int, CompletionCriteria] = {}  # {course_id: criteria}
 
 # Endpoints
 @app.get("/api/courses")
@@ -1127,6 +1188,281 @@ def get_instructor_quizzes(current_user: dict = Depends(require_role(Role.INSTRU
     instructor_courses = [c for c in courses if c.instructor.id == current_user["id"]]
     course_ids = [c.id for c in instructor_courses]
     return [q for q in quizzes if q.course_id in course_ids]
+
+# Discussion Forum Endpoints
+@app.get("/api/courses/{course_id}/discussions")
+def get_course_discussions(course_id: int):
+    """Get all discussion posts for a course"""
+    posts = [p for p in discussion_posts if p.course_id == course_id]
+    # Sort: pinned first, then by upvotes
+    posts.sort(key=lambda x: (not x.is_pinned, -x.upvotes))
+    return posts
+
+@app.post("/api/discussions", status_code=201)
+def create_discussion(post: PostCreate, current_user: dict = Depends(get_current_user)):
+    """Create a new discussion post"""
+    course = next((c for c in courses if c.id == post.course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    new_post = DiscussionPost(
+        id=len(discussion_posts) + 1,
+        course_id=post.course_id,
+        user_id=current_user["id"],
+        user_name=current_user["name"],
+        user_avatar=current_user["avatar"],
+        title=post.title,
+        content=post.content,
+        created_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        upvotes=0,
+        is_pinned=False,
+        reply_count=0
+    )
+    discussion_posts.append(new_post)
+    post_upvotes[new_post.id] = []
+    post_replies[new_post.id] = []
+    return new_post
+
+@app.get("/api/discussions/{post_id}")
+def get_discussion(post_id: int):
+    """Get a discussion post with replies"""
+    post = next((p for p in discussion_posts if p.id == post_id), None)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    replies = post_replies.get(post_id, [])
+    return {"post": post, "replies": replies}
+
+@app.post("/api/discussions/{post_id}/replies")
+def add_reply(post_id: int, reply: ReplyCreate, current_user: dict = Depends(get_current_user)):
+    """Add a reply to a discussion post"""
+    post = next((p for p in discussion_posts if p.id == post_id), None)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    if post_id not in post_replies:
+        post_replies[post_id] = []
+    
+    new_reply = Reply(
+        id=len(post_replies[post_id]) + 1,
+        post_id=post_id,
+        user_id=current_user["id"],
+        user_name=current_user["name"],
+        user_avatar=current_user["avatar"],
+        content=reply.content,
+        created_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        upvotes=0
+    )
+    post_replies[post_id].append(new_reply)
+    reply_upvotes[new_reply.id] = []
+    
+    # Update reply count
+    post.reply_count += 1
+    
+    return new_reply
+
+@app.post("/api/discussions/{post_id}/upvote")
+def upvote_post(post_id: int, current_user: dict = Depends(get_current_user)):
+    """Upvote or remove upvote from a post"""
+    post = next((p for p in discussion_posts if p.id == post_id), None)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    if post_id not in post_upvotes:
+        post_upvotes[post_id] = []
+    
+    user_id = current_user["id"]
+    if user_id in post_upvotes[post_id]:
+        # Remove upvote
+        post_upvotes[post_id].remove(user_id)
+        post.upvotes -= 1
+        return {"upvoted": False, "upvotes": post.upvotes}
+    else:
+        # Add upvote
+        post_upvotes[post_id].append(user_id)
+        post.upvotes += 1
+        return {"upvoted": True, "upvotes": post.upvotes}
+
+@app.post("/api/discussions/{post_id}/replies/{reply_id}/upvote")
+def upvote_reply(post_id: int, reply_id: int, current_user: dict = Depends(get_current_user)):
+    """Upvote or remove upvote from a reply"""
+    if post_id not in post_replies:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    reply = next((r for r in post_replies[post_id] if r.id == reply_id), None)
+    if not reply:
+        raise HTTPException(status_code=404, detail="Reply not found")
+    
+    if reply_id not in reply_upvotes:
+        reply_upvotes[reply_id] = []
+    
+    user_id = current_user["id"]
+    if user_id in reply_upvotes[reply_id]:
+        # Remove upvote
+        reply_upvotes[reply_id].remove(user_id)
+        reply.upvotes -= 1
+        return {"upvoted": False, "upvotes": reply.upvotes}
+    else:
+        # Add upvote
+        reply_upvotes[reply_id].append(user_id)
+        reply.upvotes += 1
+        return {"upvoted": True, "upvotes": reply.upvotes}
+
+@app.post("/api/discussions/{post_id}/pin")
+def pin_post(post_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Pin or unpin a discussion post (instructor/admin only)"""
+    post = next((p for p in discussion_posts if p.id == post_id), None)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    post.is_pinned = not post.is_pinned
+    return {"pinned": post.is_pinned}
+
+@app.delete("/api/discussions/{post_id}")
+def delete_post(post_id: int, current_user: dict = Depends(get_current_user)):
+    """Delete a discussion post (author or instructor/admin only)"""
+    post = next((p for p in discussion_posts if p.id == post_id), None)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    # Check if user is author or instructor/admin
+    if post.user_id != current_user["id"] and current_user["role"] not in [Role.INSTRUCTOR, Role.ADMIN]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    discussion_posts.remove(post)
+    if post_id in post_replies:
+        del post_replies[post_id]
+    if post_id in post_upvotes:
+        del post_upvotes[post_id]
+    
+    return {"message": "Post deleted"}
+
+# Certificate Generation Endpoints
+def generate_verification_code() -> str:
+    """Generate a unique 12-character verification code"""
+    return secrets.token_urlsafe(9)[:12].upper()
+
+def check_completion_criteria(user_id: int, course_id: int) -> tuple[bool, str]:
+    """Check if user meets course completion criteria"""
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        return False, "Course not found"
+    
+    criteria = course_completion_criteria.get(course_id, CompletionCriteria())
+    
+    # Check progress
+    user_progress = progress_db.get(user_id, {})
+    completed_lessons = user_progress.get(course_id, [])
+    total_lessons = sum(len(m.lessons) for m in course.modules)
+    progress_percent = int((len(completed_lessons) / total_lessons * 100) if total_lessons > 0 else 0)
+    
+    if progress_percent < criteria.min_progress:
+        return False, f"Need {criteria.min_progress}% progress (current: {progress_percent}%)"
+    
+    # Check assignments if required
+    if criteria.required_assignments:
+        course_assignments = [a for a in assignments if a.course_id == course_id]
+        if course_assignments:
+            user_submissions = []
+            for assignment in course_assignments:
+                subs = submissions_db.get(assignment.id, [])
+                user_sub = next((s for s in subs if s["user_id"] == user_id and s.get("grade") is not None), None)
+                if user_sub:
+                    user_submissions.append(user_sub)
+            
+            if len(user_submissions) < len(course_assignments):
+                return False, "All assignments must be completed and graded"
+    
+    # Check quizzes if required
+    if criteria.required_quizzes:
+        course_quizzes = [q for q in quizzes if q.course_id == course_id]
+        if course_quizzes:
+            passed_quizzes = 0
+            for quiz in course_quizzes:
+                attempts = quiz_attempts_db.get(quiz.id, [])
+                user_attempts = [a for a in attempts if a["user_id"] == user_id]
+                if user_attempts:
+                    best_attempt = max(user_attempts, key=lambda x: x["percentage"])
+                    if best_attempt["percentage"] >= criteria.min_quiz_score:
+                        passed_quizzes += 1
+            
+            if passed_quizzes < len(course_quizzes):
+                return False, f"Must pass all quizzes with {criteria.min_quiz_score}% or higher"
+    
+    return True, "All criteria met"
+
+@app.post("/api/courses/{course_id}/certificate", status_code=201)
+def generate_certificate(course_id: int, current_user: dict = Depends(get_current_user)):
+    """Generate a certificate for course completion"""
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    # Check if already has certificate
+    existing = next((cert for cert in certificates if cert.user_id == current_user["id"] and cert.course_id == course_id), None)
+    if existing:
+        return existing
+    
+    # Check completion criteria
+    meets_criteria, message = check_completion_criteria(current_user["id"], course_id)
+    if not meets_criteria:
+        raise HTTPException(status_code=400, detail=f"Course not completed: {message}")
+    
+    # Generate certificate
+    new_cert = Certificate(
+        id=len(certificates) + 1,
+        user_id=current_user["id"],
+        user_name=current_user["name"],
+        course_id=course_id,
+        course_name=course.title,
+        instructor_name=course.instructor.name,
+        issued_at=datetime.now().strftime("%Y-%m-%d"),
+        verification_code=generate_verification_code(),
+        completion_date=datetime.now().strftime("%Y-%m-%d")
+    )
+    certificates.append(new_cert)
+    return new_cert
+
+@app.get("/api/users/{user_id}/certificates")
+def get_user_certificates(user_id: int, current_user: dict = Depends(get_current_user)):
+    """Get all certificates for a user"""
+    if current_user["id"] != user_id and current_user["role"] != Role.ADMIN:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    return [cert for cert in certificates if cert.user_id == user_id]
+
+@app.get("/api/certificates/verify/{verification_code}")
+def verify_certificate(verification_code: str):
+    """Verify a certificate by its verification code"""
+    cert = next((c for c in certificates if c.verification_code == verification_code), None)
+    if not cert:
+        raise HTTPException(status_code=404, detail="Certificate not found")
+    return cert
+
+@app.get("/api/courses/{course_id}/completion-status")
+def get_completion_status(course_id: int, current_user: dict = Depends(get_current_user)):
+    """Check if user can generate certificate"""
+    meets_criteria, message = check_completion_criteria(current_user["id"], course_id)
+    
+    # Check if already has certificate
+    has_certificate = any(cert.user_id == current_user["id"] and cert.course_id == course_id for cert in certificates)
+    
+    return {
+        "can_generate": meets_criteria and not has_certificate,
+        "has_certificate": has_certificate,
+        "message": message,
+        "criteria": course_completion_criteria.get(course_id, CompletionCriteria()).dict()
+    }
+
+@app.put("/api/courses/{course_id}/completion-criteria")
+def set_completion_criteria(course_id: int, criteria: CompletionCriteria, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Set completion criteria for a course (instructor/admin only)"""
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    course_completion_criteria[course_id] = criteria
+    return criteria
 
 if __name__ == "__main__":
     import uvicorn

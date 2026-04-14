@@ -22,6 +22,12 @@ interface Progress {
   progress_percent: number
 }
 
+interface CompletionStatus {
+  can_generate: boolean
+  has_certificate: boolean
+  message: string
+}
+
 export default function CourseDetail() {
   const params = useParams()
   const router = useRouter()
@@ -29,6 +35,7 @@ export default function CourseDetail() {
   const [course, setCourse] = useState<Course | null>(null)
   const [progress, setProgress] = useState<Progress | null>(null)
   const [enrolled, setEnrolled] = useState(false)
+  const [completionStatus, setCompletionStatus] = useState<CompletionStatus | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -56,6 +63,13 @@ export default function CourseDetail() {
         .then(r => r.json())
         .then(setProgress)
         .catch(() => setProgress(null))
+
+      fetch(`${baseUrl}/api/courses/${params.id}/completion-status`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+        .then(r => r.json())
+        .then(setCompletionStatus)
+        .catch(() => setCompletionStatus(null))
         .finally(() => setLoading(false))
     } else {
       setLoading(false)
@@ -96,11 +110,40 @@ export default function CourseDetail() {
       body: JSON.stringify({ lesson_id: lessonId, completed: !isCompleted })
     })
 
-    // Refresh progress
+    // Refresh progress and completion status
     const res = await fetch(`${baseUrl}/api/courses/${params.id}/progress`, {
       headers: { Authorization: `Bearer ${token}` }
     })
     setProgress(await res.json())
+
+    const statusRes = await fetch(`${baseUrl}/api/courses/${params.id}/completion-status`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    setCompletionStatus(await statusRes.json())
+  }
+
+  const handleGenerateCertificate = async () => {
+    if (!user || !token) return
+
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+    try {
+      const res = await fetch(`${baseUrl}/api/courses/${params.id}/certificate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      
+      if (!res.ok) {
+        const error = await res.json()
+        alert(error.detail)
+        return
+      }
+
+      const cert = await res.json()
+      router.push(`/certificates/${cert.verification_code}`)
+    } catch (err) {
+      console.error(err)
+      alert('Failed to generate certificate')
+    }
   }
 
   if (authLoading || loading || !course) return <div className="container"><p>Loading...</p></div>
@@ -115,6 +158,10 @@ export default function CourseDetail() {
           <span>📚 {course.category}</span>
         </div>
         <p className="course-description">{course.description}</p>
+
+        <div className="course-tabs">
+          <a href={`/courses/${params.id}/discussions`} className="tab-link">💬 Discussions</a>
+        </div>
 
         {enrolled && progress && (
           <>
@@ -168,6 +215,24 @@ export default function CourseDetail() {
               </div>
               <p style={{ marginTop: 8, color: 'var(--text-secondary)' }}>{progress?.progress_percent || 0}% complete</p>
               <button className="btn btn-primary" style={{ marginTop: 16 }}>Continue Learning</button>
+              
+              {completionStatus?.has_certificate && (
+                <a href="/certificates" className="btn btn-secondary" style={{ marginTop: 12, display: 'block', textAlign: 'center' }}>
+                  View Certificate
+                </a>
+              )}
+              
+              {completionStatus?.can_generate && (
+                <button onClick={handleGenerateCertificate} className="btn btn-primary" style={{ marginTop: 12, background: 'var(--success)' }}>
+                  🏆 Generate Certificate
+                </button>
+              )}
+              
+              {!completionStatus?.can_generate && !completionStatus?.has_certificate && (
+                <p style={{ marginTop: 12, fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+                  {completionStatus?.message}
+                </p>
+              )}
             </>
           ) : (
             <>
