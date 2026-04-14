@@ -48,8 +48,8 @@ jobs:
           # base-url: https://api-main-beta.aiml.asu.edu/queryV2
 
           # ASU provider identifier sent with each request.
-          # Default: asu
-          # model-provider: asu
+          # Default: openai
+          model-provider: openai
 
           # ── Architecture ──────────────────────────────────────────
           # single-pass : one LLM call, fastest, good for small PRs
