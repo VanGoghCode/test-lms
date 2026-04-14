@@ -23,6 +23,7 @@ export function Header() {
             <>
               <a href="/instructor">Instructor</a>
               <a href="/instructor/assignments">Grading</a>
+              <a href="/instructor/quizzes">Quizzes</a>
             </>
           )}
         </nav>

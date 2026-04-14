@@ -108,6 +108,53 @@ class GradeSubmission(BaseModel):
     grade: int
     feedback: Optional[str] = None
 
+# Quiz/Exam Models
+class QuestionType(str, Enum):
+    MULTIPLE_CHOICE = "multiple_choice"
+    TRUE_FALSE = "true_false"
+    SHORT_ANSWER = "short_answer"
+
+class QuizQuestion(BaseModel):
+    id: int
+    question: str
+    type: QuestionType
+    options: Optional[List[str]] = None  # For multiple choice
+    correct_answer: str
+    points: int = 1
+
+class Quiz(BaseModel):
+    id: int
+    title: str
+    course_id: int
+    course_name: str
+    description: str
+    time_limit: Optional[int] = None  # in minutes
+    questions: List[QuizQuestion]
+    total_points: int
+    passing_score: int
+
+class QuizCreate(BaseModel):
+    title: str
+    course_id: int
+    description: str
+    time_limit: Optional[int] = None
+    passing_score: int = 70
+
+class QuestionCreate(BaseModel):
+    question: str
+    type: QuestionType
+    options: Optional[List[str]] = None
+    correct_answer: str
+    points: int = 1
+
+class QuizAnswer(BaseModel):
+    question_id: int
+    answer: str
+
+class QuizSubmission(BaseModel):
+    quiz_id: int
+    answers: List[QuizAnswer]
+
 class User(BaseModel):
     id: int
     name: str
@@ -377,6 +424,12 @@ assignments = [
 
 # Submissions: {assignment_id: [{user_id, content, file_url, submitted_at, is_late}]}
 submissions_db: dict[int, list] = {}
+
+# Quiz data
+quizzes: List[Quiz] = []
+
+# Quiz attempts: {quiz_id: [{user_id, answers, score, submitted_at, time_taken}]}
+quiz_attempts_db: dict[int, list] = {}
 
 # Endpoints
 @app.get("/api/courses")
@@ -890,6 +943,190 @@ def get_instructor_assignments(current_user: dict = Depends(require_role(Role.IN
     instructor_courses = [c for c in courses if c.instructor.id == current_user["id"]]
     course_ids = [c.id for c in instructor_courses]
     return [a for a in assignments if a.course_id in course_ids]
+
+# Quiz/Exam Endpoints
+@app.post("/api/quizzes", status_code=201)
+def create_quiz(quiz_data: QuizCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Create a new quiz (instructor/admin only)"""
+    course = next((c for c in courses if c.id == quiz_data.course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    new_quiz = Quiz(
+        id=len(quizzes) + 1,
+        title=quiz_data.title,
+        course_id=quiz_data.course_id,
+        course_name=course.title,
+        description=quiz_data.description,
+        time_limit=quiz_data.time_limit,
+        questions=[],
+        total_points=0,
+        passing_score=quiz_data.passing_score
+    )
+    quizzes.append(new_quiz)
+    return new_quiz
+
+@app.get("/api/quizzes/{quiz_id}")
+def get_quiz(quiz_id: int, current_user: dict = Depends(get_current_user)):
+    """Get quiz details"""
+    quiz = next((q for q in quizzes if q.id == quiz_id), None)
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    return quiz
+
+@app.get("/api/quizzes/{quiz_id}/questions")
+def get_quiz_questions(quiz_id: int, current_user: dict = Depends(get_current_user)):
+    """Get quiz questions (without correct answers for students)"""
+    quiz = next((q for q in quizzes if q.id == quiz_id), None)
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    
+    # For students, hide correct answers
+    if current_user["role"] == Role.STUDENT:
+        questions = []
+        for q in quiz.questions:
+            q_dict = q.dict()
+            q_dict.pop("correct_answer")
+            questions.append(q_dict)
+        return questions
+    
+    return quiz.questions
+
+@app.post("/api/quizzes/{quiz_id}/questions")
+def add_question(quiz_id: int, question: QuestionCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Add a question to a quiz (instructor/admin only)"""
+    quiz = next((q for q in quizzes if q.id == quiz_id), None)
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    
+    new_question = QuizQuestion(
+        id=len(quiz.questions) + 1,
+        question=question.question,
+        type=question.type,
+        options=question.options,
+        correct_answer=question.correct_answer,
+        points=question.points
+    )
+    quiz.questions.append(new_question)
+    quiz.total_points += question.points
+    return new_question
+
+@app.put("/api/quizzes/{quiz_id}/questions/{question_id}")
+def update_question(quiz_id: int, question_id: int, question: QuestionCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Update a quiz question (instructor/admin only)"""
+    quiz = next((q for q in quizzes if q.id == quiz_id), None)
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    
+    existing = next((q for q in quiz.questions if q.id == question_id), None)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Question not found")
+    
+    # Update total points
+    quiz.total_points -= existing.points
+    quiz.total_points += question.points
+    
+    existing.question = question.question
+    existing.type = question.type
+    existing.options = question.options
+    existing.correct_answer = question.correct_answer
+    existing.points = question.points
+    return existing
+
+@app.delete("/api/quizzes/{quiz_id}/questions/{question_id}")
+def delete_question(quiz_id: int, question_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Delete a quiz question (instructor/admin only)"""
+    quiz = next((q for q in quizzes if q.id == quiz_id), None)
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    
+    question = next((q for q in quiz.questions if q.id == question_id), None)
+    if not question:
+        raise HTTPException(status_code=404, detail="Question not found")
+    
+    quiz.total_points -= question.points
+    quiz.questions.remove(question)
+    return {"message": "Question deleted"}
+
+@app.post("/api/quizzes/{quiz_id}/submit")
+def submit_quiz(quiz_id: int, submission: QuizSubmission, current_user: dict = Depends(get_current_user)):
+    """Submit quiz answers and get auto-graded results"""
+    quiz = next((q for q in quizzes if q.id == quiz_id), None)
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz not found")
+    
+    # Calculate score
+    score = 0
+    total_points = 0
+    results = []
+    
+    for answer in submission.answers:
+        question = next((q for q in quiz.questions if q.id == answer.question_id), None)
+        if question:
+            total_points += question.points
+            is_correct = answer.answer.strip().lower() == question.correct_answer.strip().lower()
+            if is_correct:
+                score += question.points
+            results.append({
+                "question_id": answer.question_id,
+                "question": question.question,
+                "your_answer": answer.answer,
+                "correct_answer": question.correct_answer,
+                "is_correct": is_correct,
+                "points": question.points if is_correct else 0
+            })
+    
+    percentage = int((score / total_points * 100) if total_points > 0 else 0)
+    passed = percentage >= quiz.passing_score
+    
+    # Store attempt
+    attempt = {
+        "user_id": current_user["id"],
+        "user_name": current_user["name"],
+        "score": score,
+        "total_points": total_points,
+        "percentage": percentage,
+        "passed": passed,
+        "submitted_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "results": results
+    }
+    
+    if quiz_id not in quiz_attempts_db:
+        quiz_attempts_db[quiz_id] = []
+    quiz_attempts_db[quiz_id].append(attempt)
+    
+    return {
+        "score": score,
+        "total_points": total_points,
+        "percentage": percentage,
+        "passed": passed,
+        "passing_score": quiz.passing_score,
+        "results": results
+    }
+
+@app.get("/api/quizzes/{quiz_id}/attempts")
+def get_quiz_attempts(quiz_id: int, current_user: dict = Depends(get_current_user)):
+    """Get user's quiz attempts"""
+    attempts = quiz_attempts_db.get(quiz_id, [])
+    user_attempts = [a for a in attempts if a["user_id"] == current_user["id"]]
+    return user_attempts
+
+@app.get("/api/quizzes/{quiz_id}/all-attempts")
+def get_all_attempts(quiz_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Get all attempts for a quiz (instructor/admin only)"""
+    return quiz_attempts_db.get(quiz_id, [])
+
+@app.get("/api/courses/{course_id}/quizzes")
+def get_course_quizzes(course_id: int):
+    """Get all quizzes for a course"""
+    return [q for q in quizzes if q.course_id == course_id]
+
+@app.get("/api/instructor/quizzes")
+def get_instructor_quizzes(current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Get all quizzes for instructor's courses"""
+    instructor_courses = [c for c in courses if c.instructor.id == current_user["id"]]
+    course_ids = [c.id for c in instructor_courses]
+    return [q for q in quizzes if q.course_id in course_ids]
 
 if __name__ == "__main__":
     import uvicorn
