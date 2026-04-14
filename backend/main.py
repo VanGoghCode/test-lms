@@ -155,6 +155,38 @@ class QuizSubmission(BaseModel):
     quiz_id: int
     answers: List[QuizAnswer]
 
+# Discussion Forum Models
+class DiscussionPost(BaseModel):
+    id: int
+    course_id: int
+    user_id: int
+    user_name: str
+    user_avatar: str
+    title: str
+    content: str
+    created_at: str
+    upvotes: int = 0
+    is_pinned: bool = False
+    reply_count: int = 0
+
+class PostCreate(BaseModel):
+    course_id: int
+    title: str
+    content: str
+
+class Reply(BaseModel):
+    id: int
+    post_id: int
+    user_id: int
+    user_name: str
+    user_avatar: str
+    content: str
+    created_at: str
+    upvotes: int = 0
+
+class ReplyCreate(BaseModel):
+    content: str
+
 class User(BaseModel):
     id: int
     name: str
@@ -430,6 +462,12 @@ quizzes: List[Quiz] = []
 
 # Quiz attempts: {quiz_id: [{user_id, answers, score, submitted_at, time_taken}]}
 quiz_attempts_db: dict[int, list] = {}
+
+# Discussion Forum data
+discussion_posts: List[DiscussionPost] = []
+post_replies: dict[int, List[Reply]] = {}  # {post_id: [replies]}
+post_upvotes: dict[int, List[int]] = {}  # {post_id: [user_ids]}
+reply_upvotes: dict[int, List[int]] = {}  # {reply_id: [user_ids]}
 
 # Endpoints
 @app.get("/api/courses")
@@ -1127,6 +1165,154 @@ def get_instructor_quizzes(current_user: dict = Depends(require_role(Role.INSTRU
     instructor_courses = [c for c in courses if c.instructor.id == current_user["id"]]
     course_ids = [c.id for c in instructor_courses]
     return [q for q in quizzes if q.course_id in course_ids]
+
+# Discussion Forum Endpoints
+@app.get("/api/courses/{course_id}/discussions")
+def get_course_discussions(course_id: int):
+    """Get all discussion posts for a course"""
+    posts = [p for p in discussion_posts if p.course_id == course_id]
+    # Sort: pinned first, then by upvotes
+    posts.sort(key=lambda x: (not x.is_pinned, -x.upvotes))
+    return posts
+
+@app.post("/api/discussions", status_code=201)
+def create_discussion(post: PostCreate, current_user: dict = Depends(get_current_user)):
+    """Create a new discussion post"""
+    course = next((c for c in courses if c.id == post.course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    new_post = DiscussionPost(
+        id=len(discussion_posts) + 1,
+        course_id=post.course_id,
+        user_id=current_user["id"],
+        user_name=current_user["name"],
+        user_avatar=current_user["avatar"],
+        title=post.title,
+        content=post.content,
+        created_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        upvotes=0,
+        is_pinned=False,
+        reply_count=0
+    )
+    discussion_posts.append(new_post)
+    post_upvotes[new_post.id] = []
+    post_replies[new_post.id] = []
+    return new_post
+
+@app.get("/api/discussions/{post_id}")
+def get_discussion(post_id: int):
+    """Get a discussion post with replies"""
+    post = next((p for p in discussion_posts if p.id == post_id), None)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    replies = post_replies.get(post_id, [])
+    return {"post": post, "replies": replies}
+
+@app.post("/api/discussions/{post_id}/replies")
+def add_reply(post_id: int, reply: ReplyCreate, current_user: dict = Depends(get_current_user)):
+    """Add a reply to a discussion post"""
+    post = next((p for p in discussion_posts if p.id == post_id), None)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    if post_id not in post_replies:
+        post_replies[post_id] = []
+    
+    new_reply = Reply(
+        id=len(post_replies[post_id]) + 1,
+        post_id=post_id,
+        user_id=current_user["id"],
+        user_name=current_user["name"],
+        user_avatar=current_user["avatar"],
+        content=reply.content,
+        created_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        upvotes=0
+    )
+    post_replies[post_id].append(new_reply)
+    reply_upvotes[new_reply.id] = []
+    
+    # Update reply count
+    post.reply_count += 1
+    
+    return new_reply
+
+@app.post("/api/discussions/{post_id}/upvote")
+def upvote_post(post_id: int, current_user: dict = Depends(get_current_user)):
+    """Upvote or remove upvote from a post"""
+    post = next((p for p in discussion_posts if p.id == post_id), None)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    if post_id not in post_upvotes:
+        post_upvotes[post_id] = []
+    
+    user_id = current_user["id"]
+    if user_id in post_upvotes[post_id]:
+        # Remove upvote
+        post_upvotes[post_id].remove(user_id)
+        post.upvotes -= 1
+        return {"upvoted": False, "upvotes": post.upvotes}
+    else:
+        # Add upvote
+        post_upvotes[post_id].append(user_id)
+        post.upvotes += 1
+        return {"upvoted": True, "upvotes": post.upvotes}
+
+@app.post("/api/discussions/{post_id}/replies/{reply_id}/upvote")
+def upvote_reply(post_id: int, reply_id: int, current_user: dict = Depends(get_current_user)):
+    """Upvote or remove upvote from a reply"""
+    if post_id not in post_replies:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    reply = next((r for r in post_replies[post_id] if r.id == reply_id), None)
+    if not reply:
+        raise HTTPException(status_code=404, detail="Reply not found")
+    
+    if reply_id not in reply_upvotes:
+        reply_upvotes[reply_id] = []
+    
+    user_id = current_user["id"]
+    if user_id in reply_upvotes[reply_id]:
+        # Remove upvote
+        reply_upvotes[reply_id].remove(user_id)
+        reply.upvotes -= 1
+        return {"upvoted": False, "upvotes": reply.upvotes}
+    else:
+        # Add upvote
+        reply_upvotes[reply_id].append(user_id)
+        reply.upvotes += 1
+        return {"upvoted": True, "upvotes": reply.upvotes}
+
+@app.post("/api/discussions/{post_id}/pin")
+def pin_post(post_id: int, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Pin or unpin a discussion post (instructor/admin only)"""
+    post = next((p for p in discussion_posts if p.id == post_id), None)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    post.is_pinned = not post.is_pinned
+    return {"pinned": post.is_pinned}
+
+@app.delete("/api/discussions/{post_id}")
+def delete_post(post_id: int, current_user: dict = Depends(get_current_user)):
+    """Delete a discussion post (author or instructor/admin only)"""
+    post = next((p for p in discussion_posts if p.id == post_id), None)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    # Check if user is author or instructor/admin
+    if post.user_id != current_user["id"] and current_user["role"] not in [Role.INSTRUCTOR, Role.ADMIN]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    discussion_posts.remove(post)
+    if post_id in post_replies:
+        del post_replies[post_id]
+    if post_id in post_upvotes:
+        del post_upvotes[post_id]
+    
+    return {"message": "Post deleted"}
 
 if __name__ == "__main__":
     import uvicorn
