@@ -116,6 +116,10 @@ export default function CourseDetail() {
         </div>
         <p className="course-description">{course.description}</p>
 
+        <div className="course-tabs">
+          <a href={`/courses/${params.id}/discussions`} className="tab-link">💬 Discussions</a>
+        </div>
+
         {enrolled && progress && (
           <>
             <h2>Your Progress</h2>
