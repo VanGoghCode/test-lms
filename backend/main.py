@@ -206,6 +206,24 @@ class CompletionCriteria(BaseModel):
     required_quizzes: bool = False
     min_quiz_score: int = 70  # percentage
 
+
+class AnalyticsCourseMetric(BaseModel):
+    course_id: int
+    course_title: str
+    views: int
+    enrollments: int
+    completions: int
+    completion_rate: float
+    avg_progress: float
+    revenue: float
+
+
+class InstructorAnalyticsResponse(BaseModel):
+    summary: dict
+    engagement: dict
+    earnings: dict
+    courses: List[AnalyticsCourseMetric]
+
 class User(BaseModel):
     id: int
     name: str
@@ -457,6 +475,24 @@ enrollments = [
     Enrollment(id=3, course_id=5, user_id=1, progress=80, enrolled_at="2024-01-20"),
 ]
 
+# Course analytics stores
+course_views: dict[int, int] = {
+    1: 120,
+    2: 90,
+    3: 75,
+    4: 60,
+    5: 110,
+    6: 85,
+}
+course_prices: dict[int, float] = {
+    1: 89.0,
+    2: 99.0,
+    3: 79.0,
+    4: 69.0,
+    5: 119.0,
+    6: 129.0,
+}
+
 # Progress tracking: {user_id: {course_id: [completed_lesson_ids]}}
 progress_db: dict[int, dict[int, List[int]]] = {}
 
@@ -504,7 +540,12 @@ def get_courses(category: str = None, search: str = None):
 
 @app.get("/api/courses/{course_id}")
 def get_course(course_id: int):
-    return next((c for c in courses if c.id == course_id), None)
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    course_views[course_id] = course_views.get(course_id, 0) + 1
+    return course
 
 # Instructor Course Management
 @app.post("/api/courses", status_code=201)
@@ -735,6 +776,141 @@ def delete_lesson(course_id: int, module_id: int, lesson_id: int, current_user: 
 @app.get("/api/instructor/courses")
 def get_instructor_courses(current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
     return [c for c in courses if c.instructor.id == current_user["id"]]
+
+
+@app.get("/api/instructor/analytics", response_model=InstructorAnalyticsResponse)
+def get_instructor_analytics(current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    # Admins can see platform-level analytics, instructors only see their own courses.
+    if current_user["role"] == Role.ADMIN:
+        instructor_courses = courses
+    else:
+        instructor_courses = [c for c in courses if c.instructor.id == current_user["id"]]
+
+    if not instructor_courses:
+        return {
+            "summary": {
+                "total_views": 0,
+                "total_enrollments": 0,
+                "total_completions": 0,
+                "course_count": 0,
+            },
+            "engagement": {
+                "avg_progress": 0,
+                "active_learners": 0,
+                "completion_rate": 0,
+                "weekly_engagement": [
+                    {"day": "Mon", "value": 0},
+                    {"day": "Tue", "value": 0},
+                    {"day": "Wed", "value": 0},
+                    {"day": "Thu", "value": 0},
+                    {"day": "Fri", "value": 0},
+                    {"day": "Sat", "value": 0},
+                    {"day": "Sun", "value": 0},
+                ],
+            },
+            "earnings": {
+                "total_revenue": 0,
+                "avg_order_value": 0,
+                "monthly_revenue": [
+                    {"month": "Jan", "value": 0},
+                    {"month": "Feb", "value": 0},
+                    {"month": "Mar", "value": 0},
+                    {"month": "Apr", "value": 0},
+                ],
+            },
+            "courses": [],
+        }
+
+    course_ids = {c.id for c in instructor_courses}
+    instructor_enrollments = [e for e in enrollments if e.course_id in course_ids]
+
+    total_views = sum(course_views.get(cid, 0) for cid in course_ids)
+    total_enrollments = len(instructor_enrollments)
+    total_completions = len([e for e in instructor_enrollments if e.progress >= 100])
+    active_learners = len([e for e in instructor_enrollments if e.progress > 0])
+    avg_progress = round(
+        sum(e.progress for e in instructor_enrollments) / total_enrollments, 1
+    ) if total_enrollments else 0
+    completion_rate = round(
+        (total_completions / total_enrollments) * 100, 1
+    ) if total_enrollments else 0
+
+    course_metrics: List[AnalyticsCourseMetric] = []
+    total_revenue = 0.0
+
+    for course in instructor_courses:
+        course_enrollments = [e for e in instructor_enrollments if e.course_id == course.id]
+        enrollment_count = len(course_enrollments)
+        completion_count = len([e for e in course_enrollments if e.progress >= 100])
+        course_avg_progress = round(
+            sum(e.progress for e in course_enrollments) / enrollment_count, 1
+        ) if enrollment_count else 0
+        course_completion_rate = round(
+            (completion_count / enrollment_count) * 100, 1
+        ) if enrollment_count else 0
+        course_revenue = round(course_prices.get(course.id, 99.0) * enrollment_count, 2)
+        total_revenue += course_revenue
+
+        course_metrics.append(
+            AnalyticsCourseMetric(
+                course_id=course.id,
+                course_title=course.title,
+                views=course_views.get(course.id, 0),
+                enrollments=enrollment_count,
+                completions=completion_count,
+                completion_rate=course_completion_rate,
+                avg_progress=course_avg_progress,
+                revenue=course_revenue,
+            )
+        )
+
+    # Build a simple weekly engagement signal from enrollment activity.
+    weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    weekly_counts = [0, 0, 0, 0, 0, 0, 0]
+    for enrollment in instructor_enrollments:
+        try:
+            weekday = datetime.strptime(enrollment.enrolled_at, "%Y-%m-%d").weekday()
+            weekly_counts[weekday] += 1
+        except ValueError:
+            continue
+    weekly_engagement = [
+        {"day": weekday_names[idx], "value": weekly_counts[idx]}
+        for idx in range(7)
+    ]
+
+    # Mock monthly revenue split for dashboard visualization.
+    monthly_weights = [0.2, 0.24, 0.27, 0.29]
+    monthly_names = ["Jan", "Feb", "Mar", "Apr"]
+    monthly_revenue = [
+        {
+            "month": monthly_names[idx],
+            "value": round(total_revenue * weight, 2),
+        }
+        for idx, weight in enumerate(monthly_weights)
+    ]
+
+    avg_order_value = round(total_revenue / total_enrollments, 2) if total_enrollments else 0
+
+    return {
+        "summary": {
+            "total_views": total_views,
+            "total_enrollments": total_enrollments,
+            "total_completions": total_completions,
+            "course_count": len(instructor_courses),
+        },
+        "engagement": {
+            "avg_progress": avg_progress,
+            "active_learners": active_learners,
+            "completion_rate": completion_rate,
+            "weekly_engagement": weekly_engagement,
+        },
+        "earnings": {
+            "total_revenue": round(total_revenue, 2),
+            "avg_order_value": avg_order_value,
+            "monthly_revenue": monthly_revenue,
+        },
+        "courses": sorted(course_metrics, key=lambda item: item.views, reverse=True),
+    }
 
 # Progress Tracking Endpoints
 @app.get("/api/courses/{course_id}/progress")
