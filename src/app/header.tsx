@@ -18,11 +18,13 @@ export function Header() {
         <nav className="nav">
           <a href="/courses">Courses</a>
           {user && <a href="/my-learning">My Learning</a>}
+          {user && <a href="/alerts">Alerts</a>}
           {user && <a href="/assignments">Assignments</a>}
           {user && <a href="/certificates">Certificates</a>}
           {(user?.role === 'instructor' || user?.role === 'admin') && (
             <>
               <a href="/instructor">Instructor</a>
+              <a href="/instructor/analytics">Analytics</a>
               <a href="/instructor/assignments">Grading</a>
               <a href="/instructor/quizzes">Quizzes</a>
             </>
