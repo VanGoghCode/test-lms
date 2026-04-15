@@ -69,7 +69,10 @@ export default function InstructorDashboard() {
     <>
       <div className="page-header">
         <h1>Instructor Dashboard</h1>
-        <a href="/instructor/courses/new" className="btn-primary">Create New Course</a>
+        <div style={{ display: 'flex', gap: 12 }}>
+          <a href="/instructor/analytics" className="btn-secondary">View Analytics</a>
+          <a href="/instructor/courses/new" className="btn-primary">Create New Course</a>
+        </div>
       </div>
 
       <h2>My Courses</h2>
