@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from passlib.context import CryptContext
 import jwt
 from datetime import datetime, timedelta
@@ -205,6 +205,231 @@ class CompletionCriteria(BaseModel):
     required_assignments: bool = False
     required_quizzes: bool = False
     min_quiz_score: int = 70  # percentage
+
+
+class AlertPriority(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class AlertDueItem(BaseModel):
+    assignment_id: int
+    title: str
+    due_date: str
+    status: str
+
+
+class LearningAlertItem(BaseModel):
+    course_id: int
+    course_title: str
+    course_category: str
+    instructor_name: str
+    student_id: int
+    student_name: str
+    progress_percent: int
+    submitted_assignments: int
+    graded_assignments: int
+    overdue_assignments: int
+    due_soon_assignments: int
+    average_grade: Optional[float] = None
+    best_quiz_score: Optional[float] = None
+    risk_score: float
+    priority: AlertPriority
+    reasons: List[str] = Field(default_factory=list)
+    next_steps: List[str] = Field(default_factory=list)
+    due_items: List[AlertDueItem] = Field(default_factory=list)
+
+
+class AlertSummary(BaseModel):
+    tracked_items: int
+    needs_attention: int
+    high_priority: int
+    average_progress: float
+    overdue_assignments: int
+
+
+class RiskStatus(str, Enum):
+    SAFE = "safe"
+    AT_RISK = "at risk"
+
+
+class AttendanceStatus(str, Enum):
+    PRESENT = "present"
+    LATE = "late"
+    ABSENT = "absent"
+
+
+class MonitoringStatus(str, Enum):
+    SAFE = "safe"
+    WARNING = "warning"
+    HIGH_CONCERN = "high concern"
+
+
+class AttendanceEvent(BaseModel):
+    learner_id: int
+    course_id: int
+    session_date: str
+    status: Optional[AttendanceStatus] = None
+    source: Optional[str] = None
+    is_cancelled: bool = False
+    timestamp: Optional[str] = None
+
+
+class AssignmentCompletionEvent(BaseModel):
+    learner_id: int
+    course_id: int
+    assignment_id: int
+    assignment_title: Optional[str] = None
+    submitted_at: Optional[str] = None
+    deadline: Optional[str] = None
+    content: Optional[str] = None
+    file_url: Optional[str] = None
+    score: Optional[float] = None
+    is_optional: bool = False
+
+
+class QuizPerformanceEvent(BaseModel):
+    learner_id: int
+    course_id: int
+    quiz_category: str
+    score: Optional[float] = None
+    course_average: Optional[float] = None
+    quiz_id: Optional[int] = None
+    timestamp: Optional[str] = None
+
+
+class ActivityEvent(BaseModel):
+    learner_id: int
+    course_id: int
+    activity_at: Optional[str] = None
+    active: Optional[bool] = None
+    timestamp: Optional[str] = None
+
+
+class LearnerCourseState(BaseModel):
+    learner_id: int
+    course_id: int
+    learner_name: str = ""
+    course_name: str = ""
+    course_code: str = ""
+    attendance_total: int = 0
+    attendance_present: int = 0
+    attendance_late: int = 0
+    attendance_absent: int = 0
+    attendance_percentage: float = 0.0
+    attendance_flagged: bool = False
+    attendance_follow_up: bool = False
+    attendance_last_reset: str = ""
+    monthly_absences: int = 0
+    assignment_total: int = 0
+    assignment_complete: int = 0
+    assignment_percentage: float = 0.0
+    assignment_last_score: float = 0.0
+    assignment_latest_submission: str = ""
+    quiz_total: int = 0
+    quiz_score_average: float = 0.0
+    quiz_last_category: str = ""
+    recent_activity_active: bool = False
+    recent_activity_at: str = ""
+    risk_score: float = 0.0
+    risk_label: str = "safe"
+    risk_status: str = "safe"
+    last_updated_at: str = ""
+    risk_last_alert_at: str = ""
+    risk_alert_open: bool = False
+
+
+class LearnerMonitoringCard(BaseModel):
+    learner_id: int
+    learner_name: str
+    course_id: int
+    course_name: str
+    course_code: str
+    attendance_percentage: float
+    completion_percentage: float
+    risk_score: float
+    risk_label: str
+    status: str
+    overall_status: str
+
+
+class NotificationItem(BaseModel):
+    id: int
+    learner_id: int
+    course_id: int
+    learner_name: str
+    course_name: str
+    status: str
+    score: float
+    payload: dict
+    channel_status: str
+    created_at: str
+    updated_at: str
+    delivered_at: Optional[str] = None
+
+
+class NotificationSummary(BaseModel):
+    total: int
+    queued: int
+    delivered: int
+    latest_status: str
+
+
+class MonitoringSummary(BaseModel):
+    learners: int
+    at_risk: int
+    follow_up: int
+    below_attendance_target: int
+    below_completion_target: int
+
+
+class MonitoringResponse(BaseModel):
+    generated_at: str
+    summary: MonitoringSummary
+    learners: List[LearnerMonitoringCard]
+    notifications: NotificationSummary
+
+
+class MonitorExportRow(BaseModel):
+    learner_id: int
+    learner_name: str
+    course_id: int
+    course_name: str
+    course_code: str
+    attendance_percentage: str
+    completion_percentage: str
+    risk_score: str
+    risk_label: str
+    status: str
+
+
+class MonitoringChartBucket(BaseModel):
+    label: str
+    count: int
+
+
+class MonitoringAnalyticsResponse(BaseModel):
+    generated_at: str
+    summary_text: str
+    buckets: List[MonitoringChartBucket]
+    categories: List[MonitoringChartBucket]
+
+
+class MonitoringEventEnvelope(BaseModel):
+    timestamp: Optional[str] = None
+    learner_id: int
+    course_id: int
+    learner_name: Optional[str] = None
+    course_name: Optional[str] = None
+    course_code: Optional[str] = None
+
+
+class LearningAlertResponse(BaseModel):
+    scope: str
+    generated_at: str
+    summary: AlertSummary
+    alerts: List[LearningAlertItem]
 
 
 class AnalyticsCourseMetric(BaseModel):
@@ -527,6 +752,453 @@ reply_upvotes: dict[int, List[int]] = {}  # {reply_id: [user_ids]}
 # Certificate data
 certificates: List[Certificate] = []
 course_completion_criteria: dict[int, CompletionCriteria] = {}  # {course_id: criteria}
+
+learner_course_state: dict[tuple[int, int], dict] = {}
+monitoring_notifications: List[dict] = []
+attendance_source_index: dict[tuple[int, int, str], dict] = {}
+assignment_source_index: dict[tuple[int, int], dict] = {}
+quiz_source_index: dict[tuple[int, int, str], dict] = {}
+activity_source_index: dict[tuple[int, int], dict] = {}
+alert_state_by_term: dict[tuple[int, int], dict] = {}
+
+
+def _parse_timestamp(value: Optional[str]) -> datetime:
+    if not value:
+        return datetime.min
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return datetime.min
+
+
+def _safe_str(value: Optional[str]) -> str:
+    return value or ""
+
+
+def _safe_float(value: Optional[float]) -> float:
+    if value is None:
+        return 0.0
+    return float(value)
+
+
+def _safe_bool(value: Optional[bool]) -> bool:
+    return bool(value) if value is not None else False
+
+
+def _current_term_key() -> str:
+    return datetime.utcnow().strftime("%Y-T%U")
+
+
+def _get_course_code(course: Course) -> str:
+    return f"CRS-{course.id:03d}"
+
+
+def _get_or_create_state(learner_id: int, course_id: int) -> dict:
+    key = (learner_id, course_id)
+    if key not in learner_course_state:
+        course = next((c for c in courses if c.id == course_id), None)
+        learner = next((u for u in users if u.id == learner_id), None)
+        learner_course_state[key] = LearnerCourseState(
+            learner_id=learner_id,
+            course_id=course_id,
+            learner_name=learner.name if learner else "",
+            course_name=course.title if course else "",
+            course_code=_get_course_code(course) if course else f"CRS-{course_id:03d}",
+        ).dict()
+    return learner_course_state[key]
+
+
+def _compare_state(candidate: dict, existing: dict) -> bool:
+    candidate_ts = _parse_timestamp(candidate.get("last_updated_at"))
+    existing_ts = _parse_timestamp(existing.get("last_updated_at"))
+    if candidate_ts > existing_ts:
+        return True
+    if candidate_ts < existing_ts:
+        return False
+    return _safe_float(candidate.get("risk_score")) < _safe_float(existing.get("risk_score"))
+
+
+def _status_from_score(score: float) -> str:
+    return MonitoringStatus.HIGH_CONCERN.value if score < 0.5 else MonitoringStatus.WARNING.value if score < 0.75 else MonitoringStatus.SAFE.value
+
+
+def _risk_label(score: float) -> str:
+    return RiskStatus.AT_RISK.value if score < 0.5 else RiskStatus.SAFE.value
+
+
+def _attendance_ratio(state: dict) -> float:
+    total = state.get("attendance_total", 0) or 0
+    if total <= 0:
+        return 0.0
+    present = state.get("attendance_present", 0) or 0
+    late = state.get("attendance_late", 0) or 0
+    return round(((present + (late * 0.5)) / total) * 100, 2)
+
+
+def _completion_ratio(state: dict) -> float:
+    total = state.get("assignment_total", 0) or 0
+    if total <= 0:
+        return 0.0
+    complete = state.get("assignment_complete", 0) or 0
+    return round((complete / total) * 100, 2)
+
+
+def _calculate_risk_score(state: dict) -> float:
+    attendance_component = 1.0 - (_attendance_ratio(state) / 100.0)
+    completion_component = 1.0 - (_completion_ratio(state) / 100.0)
+    quiz_component = 1.0 - (_safe_float(state.get("quiz_score_average")) / 100.0)
+    if state.get("quiz_total", 0) <= 0:
+        quiz_component = 1.0 - (state.get("quiz_score_average", 0.0) / 100.0)
+    activity_component = 0.0 if state.get("recent_activity_active", False) else 1.0
+    risk_score = (attendance_component * 0.3) + (completion_component * 0.35) + (quiz_component * 0.25) + (activity_component * 0.1)
+    return round(max(0.0, min(1.0, risk_score)), 2)
+
+
+def _refresh_state_labels(state: dict) -> dict:
+    score = _calculate_risk_score(state)
+    existing_score = _safe_float(state.get("risk_score"))
+    if state.get("risk_label"):
+        if score <= existing_score:
+            state["risk_score"] = score
+            state["risk_label"] = _risk_label(score)
+            state["risk_status"] = _status_from_score(score)
+    else:
+        state["risk_score"] = score
+        state["risk_label"] = _risk_label(score)
+        state["risk_status"] = _status_from_score(score)
+    if not state.get("risk_label"):
+        state["risk_score"] = score
+        state["risk_label"] = _risk_label(score)
+        state["risk_status"] = _status_from_score(score)
+    state["last_updated_at"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    return state
+
+
+def _ensure_notification(learner_id: int, course_id: int, status: str, score: float, triggered_at: Optional[str] = None) -> dict:
+    course = next((c for c in courses if c.id == course_id), None)
+    learner = next((u for u in users if u.id == learner_id), None)
+    state = _get_or_create_state(learner_id, course_id)
+    created_at = triggered_at or datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    payload = {
+        "learner_name": state.get("learner_name") or (learner.name if learner else str(learner_id)),
+        "course_name": state.get("course_name") or (course.title if course else str(course_id)),
+        "status": status,
+        "score": round(score, 2),
+    }
+    notification = next((item for item in monitoring_notifications if item["learner_id"] == learner_id and item["course_id"] == course_id and item["status"] == status and item["created_at"][:10] == created_at[:10]), None)
+    if notification:
+        notification["payload"] = {**notification["payload"], **payload}
+        notification["updated_at"] = created_at
+        notification["channel_status"] = "queued"
+        return notification
+    new_item = {
+        "id": len(monitoring_notifications) + 1,
+        "learner_id": learner_id,
+        "course_id": course_id,
+        "learner_name": payload["learner_name"],
+        "course_name": payload["course_name"],
+        "status": status,
+        "score": round(score, 2),
+        "payload": payload,
+        "channel_status": "queued",
+        "created_at": created_at,
+        "updated_at": created_at,
+        "delivered_at": None,
+    }
+    monitoring_notifications.append(new_item)
+    return new_item
+
+
+def _update_risk_notification(state: dict) -> None:
+    key = (state["learner_id"], state["course_id"])
+    term_key = _current_term_key()
+    alert_state = alert_state_by_term.setdefault(key, {"term": term_key, "was_at_risk": False, "last_score": 1.0})
+    score = _safe_float(state.get("risk_score"))
+    at_risk = score < 0.5
+
+    if alert_state["term"] != term_key:
+        alert_state["term"] = term_key
+        alert_state["was_at_risk"] = False
+
+    if at_risk and (not alert_state["was_at_risk"] or _safe_float(alert_state.get("last_score", 1.0)) >= 0.5):
+        _ensure_notification(state["learner_id"], state["course_id"], "at risk", score)
+        state["risk_alert_open"] = True
+        state["risk_last_alert_at"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        alert_state["was_at_risk"] = True
+    elif not at_risk:
+        state["risk_alert_open"] = False
+        alert_state["was_at_risk"] = False
+
+    alert_state["last_score"] = score
+
+
+def _persist_state(candidate: dict) -> dict:
+    key = (candidate["learner_id"], candidate["course_id"])
+    existing = learner_course_state.get(key)
+    if existing and not _compare_state(candidate, existing):
+        return existing
+    learner_course_state[key] = candidate
+    _update_risk_notification(candidate)
+    return candidate
+
+
+def _build_monitoring_card(state: dict) -> LearnerMonitoringCard:
+    attendance = _safe_float(state.get("attendance_percentage"))
+    completion = _safe_float(state.get("assignment_percentage"))
+    risk = _safe_float(state.get("risk_score"))
+    values = [attendance / 100.0, completion / 100.0, risk]
+    overall = min(values) if values else 0.0
+    return LearnerMonitoringCard(
+        learner_id=state.get("learner_id", 0),
+        learner_name=_safe_str(state.get("learner_name")) or str(state.get("learner_id", 0)),
+        course_id=state.get("course_id", 0),
+        course_name=_safe_str(state.get("course_name")) or _safe_str(state.get("course_code")),
+        course_code=_safe_str(state.get("course_code")),
+        attendance_percentage=round(attendance, 2),
+        completion_percentage=round(completion, 2),
+        risk_score=round(risk, 2),
+        risk_label=_safe_str(state.get("risk_label")) or _risk_label(risk),
+        status=_status_from_score(risk),
+        overall_status=_status_from_score(overall),
+    )
+
+
+def _query_states(course_id: Optional[int] = None) -> List[dict]:
+    states = list(learner_course_state.values())
+    if course_id is not None:
+        states = [state for state in states if state.get("course_id") == course_id]
+    return states
+
+
+def _update_attendance_state(event: AttendanceEvent, timestamp: datetime) -> dict:
+    key = (event.learner_id, event.course_id, event.session_date)
+    existing = attendance_source_index.get(key)
+    if existing and existing.get("source") == "imported" and event.source != "imported":
+        return _get_or_create_state(event.learner_id, event.course_id)
+
+    effective_status = event.status or AttendanceStatus.ABSENT
+    state = _get_or_create_state(event.learner_id, event.course_id)
+    state["attendance_total"] = state.get("attendance_total", 0) + 1
+    if effective_status == AttendanceStatus.PRESENT:
+        state["attendance_present"] = state.get("attendance_present", 0) + 1
+    elif effective_status == AttendanceStatus.LATE:
+        state["attendance_late"] = state.get("attendance_late", 0) + 1
+    else:
+        state["attendance_absent"] = state.get("attendance_absent", 0) + 1
+        state["monthly_absences"] = state.get("monthly_absences", 0) + 1
+
+    state["attendance_percentage"] = _attendance_ratio(state)
+    state["attendance_flagged"] = state["attendance_percentage"] < 80.0
+    state["attendance_follow_up"] = state.get("attendance_follow_up", False) or state.get("monthly_absences", 0) > 3
+    state["last_updated_at"] = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+    attendance_source_index[key] = {
+        "source": event.source or "manual",
+        "status": effective_status.value,
+        "timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    return _refresh_state_labels(state)
+
+
+def _update_assignment_state(event: AssignmentCompletionEvent, timestamp: datetime) -> dict:
+    key = (event.learner_id, event.assignment_id)
+    existing = assignment_source_index.get(key)
+    candidate_timestamp = _parse_timestamp(event.submitted_at) if event.submitted_at else timestamp
+    if existing and _parse_timestamp(existing.get("submitted_at")) > candidate_timestamp:
+        return _get_or_create_state(event.learner_id, event.course_id)
+
+    state = _get_or_create_state(event.learner_id, event.course_id)
+    content = _safe_str(event.content)
+    has_file = bool(event.file_url)
+    is_complete = bool(content.strip()) or has_file
+    state["assignment_total"] = state.get("assignment_total", 0) + 1
+    if is_complete:
+        state["assignment_complete"] = state.get("assignment_complete", 0) + 1
+    state["assignment_percentage"] = _completion_ratio(state)
+    state["assignment_last_score"] = _safe_float(event.score)
+    state["assignment_latest_submission"] = candidate_timestamp.strftime("%Y-%m-%d %H:%M:%S")
+    assignment_source_index[key] = {
+        "submitted_at": candidate_timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+        "score": _safe_float(event.score),
+        "is_optional": _safe_bool(event.is_optional),
+    }
+    return _refresh_state_labels(state)
+
+
+def _update_quiz_state(event: QuizPerformanceEvent, timestamp: datetime) -> dict:
+    state = _get_or_create_state(event.learner_id, event.course_id)
+    key = (event.learner_id, event.course_id, event.quiz_category)
+    quiz_score = _safe_float(event.score)
+    if quiz_score <= 0 and event.course_average is not None:
+        quiz_score = _safe_float(event.course_average)
+    previous = quiz_source_index.get(key)
+    if previous and _parse_timestamp(previous.get("timestamp")) > timestamp:
+        return state
+    state["quiz_total"] = state.get("quiz_total", 0) + 1
+    total_score = state.get("quiz_score_average", 0.0) * (state["quiz_total"] - 1)
+    state["quiz_score_average"] = round((total_score + quiz_score) / state["quiz_total"], 2)
+    state["quiz_last_category"] = event.quiz_category
+    quiz_source_index[key] = {
+        "score": quiz_score,
+        "timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    return _refresh_state_labels(state)
+
+
+def _update_activity_state(event: ActivityEvent, timestamp: datetime) -> dict:
+    state = _get_or_create_state(event.learner_id, event.course_id)
+    key = (event.learner_id, event.course_id)
+    previous = activity_source_index.get(key)
+    if previous and _parse_timestamp(previous.get("timestamp")) > timestamp:
+        return state
+    active = _safe_bool(event.active)
+    state["recent_activity_active"] = active if event.activity_at or event.active is not None else False
+    state["recent_activity_at"] = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+    activity_source_index[key] = {"active": state["recent_activity_active"], "timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S")}
+    return _refresh_state_labels(state)
+
+
+def _persist_monitoring_payload(state: dict, event: dict) -> dict:
+    state["learner_name"] = _safe_str(event.get("learner_name")) or state.get("learner_name", "")
+    state["course_name"] = _safe_str(event.get("course_name")) or state.get("course_name", "")
+    state["course_code"] = _safe_str(event.get("course_code")) or state.get("course_code", "")
+    state["last_updated_at"] = _safe_str(event.get("timestamp")) or state.get("last_updated_at", "") or datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    return _persist_state(state)
+
+
+@app.post("/api/monitoring/events")
+def record_monitoring_event(event: MonitoringEventEnvelope, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN, Role.STUDENT))):
+    state = _get_or_create_state(event.learner_id, event.course_id)
+    return _persist_monitoring_payload(state, event.dict())
+
+
+@app.get("/api/monitoring/learners", response_model=MonitoringResponse)
+def get_monitoring_learners(course_id: Optional[int] = None, search: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    states = _query_states(course_id)
+    cards = [_build_monitoring_card(state) for state in states]
+    if search:
+        search_value = search.lower()
+        cards = [card for card in cards if search_value in card.learner_name.lower() or search_value in card.course_name.lower() or search_value in card.status.lower()]
+    if status:
+        cards = [card for card in cards if card.status == status]
+    cards.sort(key=lambda item: (item.overall_status != MonitoringStatus.HIGH_CONCERN.value, item.overall_status != MonitoringStatus.WARNING.value, item.risk_score, item.attendance_percentage))
+    summary = MonitoringSummary(
+        learners=len(cards),
+        at_risk=len([card for card in cards if card.status == MonitoringStatus.HIGH_CONCERN.value]),
+        follow_up=len([state for state in states if state.get("attendance_follow_up")]),
+        below_attendance_target=len([card for card in cards if card.attendance_percentage < 80.0]),
+        below_completion_target=len([card for card in cards if card.completion_percentage < 75.0]),
+    )
+    notifications = NotificationSummary(
+        total=len(monitoring_notifications),
+        queued=len([item for item in monitoring_notifications if item["channel_status"] == "queued"]),
+        delivered=len([item for item in monitoring_notifications if item["channel_status"] == "delivered"]),
+        latest_status=monitoring_notifications[0]["status"] if monitoring_notifications else "",
+    )
+    return MonitoringResponse(generated_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), summary=summary, learners=cards, notifications=notifications)
+
+
+@app.get("/api/monitoring/learners/{learner_id}/{course_id}")
+def get_monitoring_state(learner_id: int, course_id: int, current_user: dict = Depends(get_current_user)):
+    state = _get_or_create_state(learner_id, course_id)
+    card = _build_monitoring_card(state)
+    return {**state, **card.dict()}
+
+
+@app.post("/api/monitoring/attendance")
+def record_attendance(event: AttendanceEvent, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    state = _update_attendance_state(event, datetime.utcnow())
+    return _build_monitoring_card(state)
+
+
+@app.post("/api/monitoring/assignments")
+def record_assignment_completion(event: AssignmentCompletionEvent, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    state = _update_assignment_state(event, _parse_timestamp(event.submitted_at))
+    return _build_monitoring_card(state)
+
+
+@app.post("/api/monitoring/quizzes")
+def record_quiz_performance(event: QuizPerformanceEvent, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    state = _update_quiz_state(event, _parse_timestamp(event.timestamp))
+    return _build_monitoring_card(state)
+
+
+@app.post("/api/monitoring/activity")
+def record_activity(event: ActivityEvent, current_user: dict = Depends(get_current_user)):
+    state = _update_activity_state(event, _parse_timestamp(event.timestamp))
+    return _build_monitoring_card(state)
+
+
+@app.get("/api/monitoring/export")
+def export_monitoring(course_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
+    states = [_build_monitoring_card(state) for state in _query_states(course_id)]
+    rows = [
+        MonitorExportRow(
+            learner_id=card.learner_id,
+            learner_name=card.learner_name or "",
+            course_id=card.course_id,
+            course_name=card.course_name or "",
+            course_code=next((state.get("course_code", "") for state in _query_states(course_id) if state.get("learner_id") == card.learner_id and state.get("course_id") == card.course_id), ""),
+            attendance_percentage=f"{card.attendance_percentage:.2f}",
+            completion_percentage=f"{card.completion_percentage:.2f}",
+            risk_score=f"{card.risk_score:.2f}",
+            risk_label=card.risk_label,
+            status=card.status,
+        ).dict()
+        for card in states
+    ]
+    return {"rows": rows}
+
+
+@app.get("/api/monitoring/analytics", response_model=MonitoringAnalyticsResponse)
+def get_monitoring_analytics(course_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
+    states = _query_states(course_id)
+    counts = {MonitoringStatus.SAFE.value: 0, MonitoringStatus.WARNING.value: 0, MonitoringStatus.HIGH_CONCERN.value: 0}
+    for state in states:
+        counts[_status_from_score(_safe_float(state.get("risk_score")))] += 1
+    categories = [
+        MonitoringChartBucket(label="High concern", count=counts[MonitoringStatus.HIGH_CONCERN.value]),
+        MonitoringChartBucket(label="Warning", count=counts[MonitoringStatus.WARNING.value]),
+        MonitoringChartBucket(label="Safe", count=counts[MonitoringStatus.SAFE.value]),
+    ]
+    summary_text = f"{counts[MonitoringStatus.HIGH_CONCERN.value]} learners are in high concern, {counts[MonitoringStatus.WARNING.value]} are in warning, and {counts[MonitoringStatus.SAFE.value]} are safe."
+    return MonitoringAnalyticsResponse(
+        generated_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        summary_text=summary_text,
+        buckets=[
+            MonitoringChartBucket(label="Safe", count=counts[MonitoringStatus.SAFE.value]),
+            MonitoringChartBucket(label="Warning", count=counts[MonitoringStatus.WARNING.value]),
+            MonitoringChartBucket(label="High concern", count=counts[MonitoringStatus.HIGH_CONCERN.value]),
+        ],
+        categories=categories,
+    )
+
+
+@app.get("/api/notifications")
+def get_notifications(current_user: dict = Depends(get_current_user)):
+    items = sorted(monitoring_notifications, key=lambda item: item["created_at"], reverse=True)
+    return {"items": items, "summary": NotificationSummary(total=len(items), queued=len([item for item in items if item["channel_status"] == "queued"]), delivered=len([item for item in items if item["channel_status"] == "delivered"]), latest_status=items[0]["status"] if items else "").dict()}
+
+
+@app.post("/api/notifications/retry")
+def retry_notifications(current_user: dict = Depends(require_role(Role.ADMIN, Role.INSTRUCTOR))):
+    queued = [item for item in sorted(monitoring_notifications, key=lambda item: item["created_at"]) if item["channel_status"] == "queued"]
+    for item in queued:
+        item["channel_status"] = "delivered"
+        item["delivered_at"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    return {"retried": len(queued)}
+
+
+@app.post("/api/monitoring/reset-follow-up")
+def reset_follow_up(current_user: dict = Depends(require_role(Role.ADMIN))):
+    for state in learner_course_state.values():
+        if state.get("monthly_absences", 0) == 0:
+            state["attendance_follow_up"] = False
+    return {"message": "Follow-up flags reset"}
 
 # Endpoints
 @app.get("/api/courses")
@@ -1011,6 +1683,190 @@ def get_enrollments(user_id: int, current_user: dict = Depends(get_current_user)
         if course:
             result.append({**e.dict(), "course": course})
     return result
+
+
+def _get_submission_for_user(assignment_id: int, user_id: int) -> Optional[dict]:
+    return next((submission for submission in submissions_db.get(assignment_id, []) if submission["user_id"] == user_id), None)
+
+
+def _get_learning_alert(course: Course, enrollment: Enrollment, user_id: int) -> LearningAlertItem:
+    course_assignments = [assignment for assignment in assignments if assignment.course_id == course.id]
+    course_quizzes = [quiz for quiz in quizzes if quiz.course_id == course.id]
+
+    submitted_assignments = 0
+    graded_assignments = 0
+    overdue_items: List[AlertDueItem] = []
+    due_soon_items: List[AlertDueItem] = []
+    graded_scores: List[float] = []
+
+    for assignment in course_assignments:
+        submission = _get_submission_for_user(assignment.id, user_id)
+        if submission:
+            submitted_assignments += 1
+            if submission.get("grade") is not None:
+                graded_assignments += 1
+                graded_scores.append(float(submission["grade"]))
+            continue
+
+        try:
+            due_date = datetime.strptime(assignment.due_date, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+
+        days_until_due = (due_date - datetime.utcnow().date()).days
+        if days_until_due < 0:
+            overdue_items.append(
+                AlertDueItem(
+                    assignment_id=assignment.id,
+                    title=assignment.title,
+                    due_date=assignment.due_date,
+                    status="overdue",
+                )
+            )
+        elif days_until_due <= 5:
+            due_soon_items.append(
+                AlertDueItem(
+                    assignment_id=assignment.id,
+                    title=assignment.title,
+                    due_date=assignment.due_date,
+                    status="due soon",
+                )
+            )
+
+    quiz_scores: List[float] = []
+    for quiz in course_quizzes:
+        attempts = [attempt for attempt in quiz_attempts_db.get(quiz.id, []) if attempt["user_id"] == user_id]
+        if attempts:
+            best_attempt = max(attempts, key=lambda attempt: attempt["percentage"])
+            quiz_scores.append(float(best_attempt["percentage"]))
+
+    best_quiz_score = round(sum(quiz_scores) / len(quiz_scores), 1) if quiz_scores else None
+    average_grade = round(sum(graded_scores) / len(graded_scores), 1) if graded_scores else None
+
+    progress_component = max(0.0, 1 - (enrollment.progress / 100))
+    assignment_pressure = 0.0
+    if course_assignments:
+        assignment_pressure = min(
+            1.0,
+            (
+                len(overdue_items)
+                + (len(due_soon_items) * 0.5)
+                + max(0, len(course_assignments) - submitted_assignments) * 0.3
+            ) / len(course_assignments),
+        )
+
+    quiz_pressure = 0.0
+    if course_quizzes:
+        if best_quiz_score is None:
+            quiz_pressure = 0.5
+        else:
+            quiz_pressure = max(0.0, (70 - best_quiz_score) / 70)
+
+    risk_score = round(min(1.0, progress_component * 0.55 + assignment_pressure * 0.3 + quiz_pressure * 0.15), 2)
+    if risk_score >= 0.7:
+        priority = AlertPriority.HIGH
+    elif risk_score >= 0.4:
+        priority = AlertPriority.MEDIUM
+    else:
+        priority = AlertPriority.LOW
+
+    reasons: List[str] = []
+    if enrollment.progress < 40:
+        reasons.append(f"Progress is at {enrollment.progress}%")
+    elif enrollment.progress < 70:
+        reasons.append(f"Progress is below the recommended pace at {enrollment.progress}%")
+
+    if overdue_items:
+        reasons.append(f"{len(overdue_items)} assignment{'s' if len(overdue_items) != 1 else ''} are overdue")
+    elif due_soon_items:
+        reasons.append(f"{len(due_soon_items)} assignment{'s' if len(due_soon_items) != 1 else ''} are due soon")
+
+    if best_quiz_score is None and course_quizzes:
+        reasons.append("No quiz attempts recorded yet")
+    elif best_quiz_score is not None and best_quiz_score < 70:
+        reasons.append(f"Average quiz score is {best_quiz_score}%")
+
+    if average_grade is not None and average_grade < 75:
+        reasons.append(f"Average assignment grade is {average_grade}%")
+
+    if not reasons:
+        reasons.append("The course is moving at a healthy pace")
+
+    next_steps: List[str] = []
+    if enrollment.progress < 50:
+        next_steps.append(f"Complete the next lesson in {course.title}")
+    if overdue_items:
+        next_steps.append("Submit the overdue assignments")
+    elif due_soon_items:
+        next_steps.append("Review the assignments due soon")
+    if best_quiz_score is not None and best_quiz_score < 70:
+        next_steps.append("Review quiz feedback before the next attempt")
+
+    if not next_steps:
+        next_steps.append("Keep following the current study plan")
+
+    due_items = [*overdue_items, *due_soon_items]
+    student = next((u for u in users if u.id == user_id), None)
+
+    return LearningAlertItem(
+        course_id=course.id,
+        course_title=course.title,
+        course_category=course.category,
+        instructor_name=course.instructor.name,
+        student_id=user_id,
+        student_name=student.name if student else f"User {user_id}",
+        progress_percent=enrollment.progress,
+        submitted_assignments=submitted_assignments,
+        graded_assignments=graded_assignments,
+        overdue_assignments=len(overdue_items),
+        due_soon_assignments=len(due_soon_items),
+        average_grade=average_grade,
+        best_quiz_score=best_quiz_score,
+        risk_score=risk_score,
+        priority=priority,
+        reasons=reasons,
+        next_steps=next_steps,
+        due_items=due_items,
+    )
+
+
+@app.get("/api/users/{user_id}/alerts", response_model=LearningAlertResponse)
+def get_learning_alerts(user_id: int, current_user: dict = Depends(get_current_user)):
+    current_role = Role(current_user["role"])
+
+    if current_role != Role.ADMIN and current_user["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    if current_role == Role.ADMIN:
+        scoped_enrollments = enrollments
+    elif current_role == Role.INSTRUCTOR:
+        instructor_course_ids = {course.id for course in courses if course.instructor.id == current_user["id"]}
+        scoped_enrollments = [enrollment for enrollment in enrollments if enrollment.course_id in instructor_course_ids]
+    else:
+        scoped_enrollments = [enrollment for enrollment in enrollments if enrollment.user_id == user_id]
+
+    alert_items = []
+    for enrollment in scoped_enrollments:
+        course = next((course for course in courses if course.id == enrollment.course_id), None)
+        if course:
+            alert_items.append(_get_learning_alert(course, enrollment, enrollment.user_id))
+
+    alert_items.sort(key=lambda item: item.risk_score, reverse=True)
+
+    summary = AlertSummary(
+        tracked_items=len(alert_items),
+        needs_attention=len([item for item in alert_items if item.priority != AlertPriority.LOW]),
+        high_priority=len([item for item in alert_items if item.priority == AlertPriority.HIGH]),
+        average_progress=round(sum(item.progress_percent for item in alert_items) / len(alert_items), 1) if alert_items else 0,
+        overdue_assignments=sum(item.overdue_assignments for item in alert_items),
+    )
+
+    return LearningAlertResponse(
+        scope=current_role.value,
+        generated_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        summary=summary,
+        alerts=alert_items,
+    )
 
 @app.get("/api/users/{user_id}/assignments")
 def get_assignments(user_id: int, status: str = None):
