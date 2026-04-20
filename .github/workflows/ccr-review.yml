@@ -74,7 +74,7 @@ jobs:
 
           # ── Inline comments ───────────────────────────────────────
           # Post short review comments on specific PR lines.
-          # Default: "false"
+          # Default: "true"
           post-inline-comments: "true"
 
           # Cap on inline comments per run to avoid noisy PRs.
@@ -85,7 +85,7 @@ jobs:
           #   findings      — one comment per finding (may cluster)
           #   file-coverage — one comment per file with findings (spread)
           # Default: findings
-          inline-comment-mode: file-coverage
+          inline-comment-mode: findings
 
           # ── Scope filtering ───────────────────────────────────────
           # Comma-separated globs for files to include in review.
@@ -94,7 +94,7 @@ jobs:
 
           # Comma-separated globs for files to exclude from review.
           # Default: "node_modules/**,dist/**,coverage/**,.git/**"
-          exclude-globs: "node_modules/**,dist/**,coverage/**,.git/**,*.lock,*.min.js"
+          exclude-globs: "node_modules/**,dist/**,coverage/**,.git/**,.github/**,.claude/**,.vscode/**,**/.next/**,**/out/**,**/*.lock,**/*.min.js"
 
           # ── Payload limits ────────────────────────────────────────
           # Maximum number of changed files to send to the LLM.

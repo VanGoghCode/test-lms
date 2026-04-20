@@ -8,6 +8,8 @@ interface Module {
   lessons: { title: string; duration: string; video_url: string }[]
 }
 
+type LessonField = keyof Module['lessons'][number]
+
 const CATEGORIES = ['Programming', 'Design', 'Data Science', 'Business', 'Marketing']
 const THUMBNAILS = [
   'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
@@ -57,9 +59,9 @@ export default function NewCourse() {
     setModules(updated)
   }
 
-  const updateLesson = (moduleIdx: number, lessonIdx: number, field: string, value: string) => {
+  const updateLesson = (moduleIdx: number, lessonIdx: number, field: LessonField, value: string) => {
     const updated = [...modules]
-    (updated[moduleIdx].lessons[lessonIdx] as any)[field] = value
+    updated[moduleIdx].lessons[lessonIdx][field] = value
     setModules(updated)
   }
 
