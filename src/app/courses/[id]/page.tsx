@@ -74,6 +74,7 @@ export default function CourseDetail() {
   const [enrolled, setEnrolled] = useState(false)
   const [completionStatus, setCompletionStatus] = useState<CompletionStatus | null>(null)
   const [loading, setLoading] = useState(true)
+  const [inWishlist, setInWishlist] = useState(false)
 
   const loadReviews = async (baseUrl: string) => {
     const response = await fetch(`${baseUrl}/api/courses/${params.id}/reviews`)
@@ -131,6 +132,13 @@ export default function CourseDetail() {
         .then(setCompletionStatus)
         .catch(() => setCompletionStatus(null))
         .finally(() => setLoading(false))
+
+      fetch(`${baseUrl}/api/wishlist/check/${params.id}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+        .then(r => r.json())
+        .then(data => setInWishlist(data.in_wishlist))
+        .catch(() => setInWishlist(false))
     } else {
       setLoading(false)
     }
@@ -253,6 +261,32 @@ export default function CourseDetail() {
     } catch (err) {
       console.error(err)
       alert('Failed to generate certificate')
+    }
+  }
+
+  const toggleWishlist = async () => {
+    if (!user || !token) {
+      router.push('/login')
+      return
+    }
+
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+    try {
+      if (inWishlist) {
+        await fetch(`${baseUrl}/api/wishlist/${params.id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        setInWishlist(false)
+      } else {
+        await fetch(`${baseUrl}/api/wishlist/${params.id}`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        setInWishlist(true)
+      }
+    } catch (err) {
+      console.error('Failed to update wishlist:', err)
     }
   }
 
@@ -434,6 +468,13 @@ export default function CourseDetail() {
             <>
               <p style={{ color: 'var(--text-secondary)', marginBottom: 8 }}>Not enrolled yet</p>
               <button className="btn btn-primary" onClick={handleEnroll}>Enroll Now</button>
+              <button 
+                className="btn btn-secondary" 
+                style={{ marginTop: 12 }}
+                onClick={toggleWishlist}
+              >
+                {inWishlist ? '❤️ Remove from Wishlist' : '🤍 Add to Wishlist'}
+              </button>
             </>
           )}
         </div>

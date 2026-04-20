@@ -18,6 +18,8 @@ export function Header() {
         <nav className="nav">
           <a href="/courses">Courses</a>
           {user && <a href="/my-learning">My Learning</a>}
+          {user && <a href="/wishlist">Wishlist</a>}
+          {user && <a href="/notifications">Notifications</a>}
           {user && <a href="/alerts">Alerts</a>}
           {user && <a href="/assignments">Assignments</a>}
           {user && <a href="/certificates">Certificates</a>}

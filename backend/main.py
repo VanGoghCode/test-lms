@@ -852,6 +852,48 @@ reply_upvotes: dict[int, List[int]] = {}  # {reply_id: [user_ids]}
 certificates: List[Certificate] = []
 course_completion_criteria: dict[int, CompletionCriteria] = {}  # {course_id: criteria}
 
+# Wishlist/Favorites data
+wishlist_items: dict[int, List[int]] = {}  # {user_id: [course_ids]}
+
+# Notifications data
+class NotificationType(str, Enum):
+    ASSIGNMENT = "assignment"
+    ANNOUNCEMENT = "announcement"
+    GRADE = "grade"
+    DISCUSSION = "discussion"
+    COURSE_UPDATE = "course_update"
+    CERTIFICATE = "certificate"
+
+class Notification(BaseModel):
+    id: int
+    user_id: int
+    type: NotificationType
+    title: str
+    message: str
+    link: Optional[str] = None
+    read: bool = False
+    created_at: str
+
+class NotificationCreate(BaseModel):
+    user_id: int
+    type: NotificationType
+    title: str
+    message: str
+    link: Optional[str] = None
+
+class NotificationPreferences(BaseModel):
+    email_assignments: bool = True
+    email_announcements: bool = True
+    email_grades: bool = True
+    email_discussions: bool = False
+    push_assignments: bool = True
+    push_announcements: bool = True
+    push_grades: bool = True
+    push_discussions: bool = False
+
+notifications: List[Notification] = []
+notification_preferences: dict[int, NotificationPreferences] = {}  # {user_id: preferences}
+
 learner_course_state: dict[tuple[int, int], dict] = {}
 monitoring_notifications: List[dict] = []
 attendance_source_index: dict[tuple[int, int, str], dict] = {}
@@ -2886,6 +2928,137 @@ def set_completion_criteria(course_id: int, criteria: CompletionCriteria, curren
     
     course_completion_criteria[course_id] = criteria
     return criteria
+
+# Wishlist/Favorites Endpoints
+@app.post("/api/wishlist/{course_id}")
+def add_to_wishlist(course_id: int, current_user: dict = Depends(get_current_user)):
+    """Add a course to user's wishlist"""
+    course = next((c for c in courses if c.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    user_id = current_user["id"]
+    if user_id not in wishlist_items:
+        wishlist_items[user_id] = []
+    
+    if course_id in wishlist_items[user_id]:
+        raise HTTPException(status_code=400, detail="Course already in wishlist")
+    
+    wishlist_items[user_id].append(course_id)
+    return {"message": "Course added to wishlist", "course_id": course_id}
+
+@app.delete("/api/wishlist/{course_id}")
+def remove_from_wishlist(course_id: int, current_user: dict = Depends(get_current_user)):
+    """Remove a course from user's wishlist"""
+    user_id = current_user["id"]
+    if user_id not in wishlist_items or course_id not in wishlist_items[user_id]:
+        raise HTTPException(status_code=404, detail="Course not in wishlist")
+    
+    wishlist_items[user_id].remove(course_id)
+    return {"message": "Course removed from wishlist"}
+
+@app.get("/api/wishlist")
+def get_wishlist(current_user: dict = Depends(get_current_user)):
+    """Get user's wishlist with course details"""
+    user_id = current_user["id"]
+    course_ids = wishlist_items.get(user_id, [])
+    
+    wishlist_courses = []
+    for course_id in course_ids:
+        course = next((c for c in courses if c.id == course_id), None)
+        if course:
+            wishlist_courses.append(_serialize_course(course))
+    
+    return wishlist_courses
+
+@app.get("/api/wishlist/check/{course_id}")
+def check_wishlist(course_id: int, current_user: dict = Depends(get_current_user)):
+    """Check if a course is in user's wishlist"""
+    user_id = current_user["id"]
+    in_wishlist = user_id in wishlist_items and course_id in wishlist_items[user_id]
+    return {"in_wishlist": in_wishlist}
+
+# Notifications Endpoints
+@app.get("/api/notifications")
+def get_notifications(unread_only: bool = False, current_user: dict = Depends(get_current_user)):
+    """Get user's notifications"""
+    user_notifications = [n for n in notifications if n.user_id == current_user["id"]]
+    
+    if unread_only:
+        user_notifications = [n for n in user_notifications if not n.read]
+    
+    # Sort by created_at descending
+    user_notifications.sort(key=lambda x: x.created_at, reverse=True)
+    return user_notifications
+
+@app.post("/api/notifications")
+def create_notification(notification: NotificationCreate, current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN))):
+    """Create a notification (instructor/admin only)"""
+    new_notification = Notification(
+        id=len(notifications) + 1,
+        user_id=notification.user_id,
+        type=notification.type,
+        title=notification.title,
+        message=notification.message,
+        link=notification.link,
+        read=False,
+        created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+    notifications.append(new_notification)
+    return new_notification
+
+@app.put("/api/notifications/{notification_id}/read")
+def mark_notification_read(notification_id: int, current_user: dict = Depends(get_current_user)):
+    """Mark a notification as read"""
+    notification = next((n for n in notifications if n.id == notification_id and n.user_id == current_user["id"]), None)
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    
+    notification.read = True
+    return notification
+
+@app.put("/api/notifications/mark-all-read")
+def mark_all_read(current_user: dict = Depends(get_current_user)):
+    """Mark all notifications as read"""
+    count = 0
+    for notification in notifications:
+        if notification.user_id == current_user["id"] and not notification.read:
+            notification.read = True
+            count += 1
+    
+    return {"message": f"Marked {count} notifications as read"}
+
+@app.delete("/api/notifications/{notification_id}")
+def delete_notification(notification_id: int, current_user: dict = Depends(get_current_user)):
+    """Delete a notification"""
+    notification = next((n for n in notifications if n.id == notification_id and n.user_id == current_user["id"]), None)
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    
+    notifications.remove(notification)
+    return {"message": "Notification deleted"}
+
+@app.get("/api/notifications/unread-count")
+def get_unread_count(current_user: dict = Depends(get_current_user)):
+    """Get count of unread notifications"""
+    count = sum(1 for n in notifications if n.user_id == current_user["id"] and not n.read)
+    return {"count": count}
+
+@app.get("/api/notifications/preferences")
+def get_notification_preferences(current_user: dict = Depends(get_current_user)):
+    """Get user's notification preferences"""
+    user_id = current_user["id"]
+    if user_id not in notification_preferences:
+        notification_preferences[user_id] = NotificationPreferences()
+    
+    return notification_preferences[user_id]
+
+@app.put("/api/notifications/preferences")
+def update_notification_preferences(preferences: NotificationPreferences, current_user: dict = Depends(get_current_user)):
+    """Update user's notification preferences"""
+    user_id = current_user["id"]
+    notification_preferences[user_id] = preferences
+    return preferences
 
 if __name__ == "__main__":
     import uvicorn
