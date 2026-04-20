@@ -894,6 +894,42 @@ class NotificationPreferences(BaseModel):
 notifications: List[Notification] = []
 notification_preferences: dict[int, NotificationPreferences] = {}  # {user_id: preferences}
 
+# Parent Portal data
+class ParentChildRelation(BaseModel):
+    parent_id: int
+    child_id: int
+    relation: str = "parent"  # parent, guardian
+    verified: bool = False
+    verification_code: str
+    created_at: str
+
+class ParentVerificationRequest(BaseModel):
+    child_email: str
+    relation: str = "parent"
+
+class ParentDashboard(BaseModel):
+    child_id: int
+    child_name: str
+    child_avatar: str
+    enrolled_courses: int
+    completed_courses: int
+    average_progress: float
+    upcoming_assignments: int
+    overdue_assignments: int
+    recent_grades: List[dict] = []
+    recent_activity: List[dict] = []
+
+class ParentNotificationSettings(BaseModel):
+    progress_updates: bool = True
+    assignment_reminders: bool = True
+    grade_notifications: bool = True
+    attendance_alerts: bool = True
+    weekly_summary: bool = True
+
+parent_child_relations: List[ParentChildRelation] = []
+parent_notification_settings: dict[int, ParentNotificationSettings] = {}  # {parent_id: settings}
+pending_verifications: dict[str, dict] = {}  # {verification_code: {parent_id, child_id}}
+
 learner_course_state: dict[tuple[int, int], dict] = {}
 monitoring_notifications: List[dict] = []
 attendance_source_index: dict[tuple[int, int, str], dict] = {}
@@ -3059,6 +3095,312 @@ def update_notification_preferences(preferences: NotificationPreferences, curren
     user_id = current_user["id"]
     notification_preferences[user_id] = preferences
     return preferences
+
+# Parent Portal Endpoints
+@app.post("/api/parent/link-child")
+def request_child_link(request: ParentVerificationRequest, current_user: dict = Depends(get_current_user)):
+    """Parent requests to link their child's account"""
+    if current_user["role"] != "student":
+        # Allow anyone to be a parent, but child must be a student
+        pass
+    
+    # Find child by email
+    child = user_by_email.get(request.child_email)
+    if not child:
+        raise HTTPException(status_code=404, detail="Child account not found with this email")
+    
+    if child["role"] != Role.STUDENT:
+        raise HTTPException(status_code=400, detail="Linked account must be a student account")
+    
+    # Check if already linked
+    existing = next((r for r in parent_child_relations if r.parent_id == current_user["id"] and r.child_id == child["id"]), None)
+    if existing:
+        raise HTTPException(status_code=400, detail="Already linked to this child")
+    
+    # Generate verification code
+    verification_code = secrets.token_urlsafe(8)[:12].upper()
+    
+    # Store pending verification
+    pending_verifications[verification_code] = {
+        "parent_id": current_user["id"],
+        "child_id": child["id"],
+        "relation": request.relation,
+        "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    # Create notification for child
+    new_notification = Notification(
+        id=len(notifications) + 1,
+        user_id=child["id"],
+        type=NotificationType.ANNOUNCEMENT,
+        title="Parent Link Request",
+        message=f"{current_user['name']} wants to link to your account as a {request.relation}. Use code: {verification_code}",
+        link="/parent-portal/verify",
+        read=False,
+        created_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    )
+    notifications.append(new_notification)
+    
+    return {
+        "message": "Verification request sent to child",
+        "verification_code": verification_code,
+        "child_name": child["name"]
+    }
+
+@app.post("/api/parent/verify/{code}")
+def verify_parent_link(code: str, current_user: dict = Depends(get_current_user)):
+    """Child verifies parent link request"""
+    pending = pending_verifications.get(code)
+    if not pending:
+        raise HTTPException(status_code=404, detail="Invalid verification code")
+    
+    if pending["child_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="This verification code is not for you")
+    
+    # Create verified relation
+    relation = ParentChildRelation(
+        parent_id=pending["parent_id"],
+        child_id=current_user["id"],
+        relation=pending["relation"],
+        verified=True,
+        verification_code=code,
+        created_at=pending["created_at"]
+    )
+    parent_child_relations.append(relation)
+    
+    # Remove from pending
+    del pending_verifications[code]
+    
+    # Notify parent
+    parent = users_db.get(pending["parent_id"])
+    if parent:
+        new_notification = Notification(
+            id=len(notifications) + 1,
+            user_id=parent["id"],
+            type=NotificationType.ANNOUNCEMENT,
+            title="Child Account Linked",
+            message=f"{current_user['name']} has verified your parent link request",
+            read=False,
+            created_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        )
+        notifications.append(new_notification)
+    
+    return {"message": "Parent link verified successfully", "parent_name": parent["name"] if parent else "Unknown"}
+
+@app.get("/api/parent/children")
+def get_parent_children(current_user: dict = Depends(get_current_user)):
+    """Get all children linked to current parent"""
+    relations = [r for r in parent_child_relations if r.parent_id == current_user["id"] and r.verified]
+    
+    children = []
+    for relation in relations:
+        child = users_db.get(relation.child_id)
+        if child:
+            children.append({
+                "child_id": child["id"],
+                "child_name": child["name"],
+                "child_email": child["email"],
+                "child_avatar": child["avatar"],
+                "relation": relation.relation,
+                "linked_at": relation.created_at
+            })
+    
+    return children
+
+@app.get("/api/parent/dashboard/{child_id}")
+def get_parent_dashboard(child_id: int, current_user: dict = Depends(get_current_user)):
+    """Get dashboard data for parent to view child's progress"""
+    # Verify parent-child relation
+    relation = next((r for r in parent_child_relations if r.parent_id == current_user["id"] and r.child_id == child_id and r.verified), None)
+    if not relation:
+        raise HTTPException(status_code=403, detail="Not authorized to view this child's data")
+    
+    child = users_db.get(child_id)
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found")
+    
+    # Get child's enrollments
+    child_enrollments = [e for e in enrollments if e.user_id == child_id]
+    
+    # Calculate stats
+    enrolled_courses = len(child_enrollments)
+    completed_courses = len([e for e in child_enrollments if e.progress >= 100])
+    average_progress = round(sum(e.progress for e in child_enrollments) / enrolled_courses, 1) if child_enrollments else 0
+    
+    # Get upcoming and overdue assignments
+    child_assignments = []
+    for assignment in assignments:
+        # Check if child is enrolled in the course
+        is_enrolled = any(e.course_id == assignment.course_id for e in child_enrollments)
+        if is_enrolled:
+            submission = _get_submission_for_user(assignment.id, child_id)
+            if not submission:
+                try:
+                    due_date = datetime.strptime(assignment.due_date, "%Y-%m-%d").date()
+                    days_until = (due_date - datetime.utcnow().date()).days
+                    child_assignments.append({
+                        "assignment": assignment,
+                        "days_until_due": days_until
+                    })
+                except ValueError:
+                    pass
+    
+    upcoming_assignments = len([a for a in child_assignments if 0 <= a["days_until_due"] <= 7])
+    overdue_assignments = len([a for a in child_assignments if a["days_until_due"] < 0])
+    
+    # Get recent grades
+    recent_grades = []
+    for assignment in assignments:
+        submission = _get_submission_for_user(assignment.id, child_id)
+        if submission and submission.get("grade") is not None:
+            recent_grades.append({
+                "assignment_title": assignment.title,
+                "course_name": assignment.course_name,
+                "grade": submission["grade"],
+                "max_grade": assignment.max_grade,
+                "submitted_at": submission.get("submitted_at")
+            })
+    recent_grades = sorted(recent_grades, key=lambda x: x["submitted_at"] or "", reverse=True)[:5]
+    
+    # Get recent activity
+    recent_activity = []
+    for enrollment in child_enrollments:
+        course = next((c for c in courses if c.id == enrollment.course_id), None)
+        if course:
+            recent_activity.append({
+                "type": "course_progress",
+                "course_name": course.title,
+                "progress": enrollment.progress,
+                "updated_at": enrollment.enrolled_at
+            })
+    recent_activity = sorted(recent_activity, key=lambda x: x["updated_at"], reverse=True)[:5]
+    
+    return ParentDashboard(
+        child_id=child_id,
+        child_name=child["name"],
+        child_avatar=child["avatar"],
+        enrolled_courses=enrolled_courses,
+        completed_courses=completed_courses,
+        average_progress=average_progress,
+        upcoming_assignments=upcoming_assignments,
+        overdue_assignments=overdue_assignments,
+        recent_grades=recent_grades,
+        recent_activity=recent_activity
+    )
+
+@app.get("/api/parent/child/{child_id}/courses")
+def get_parent_child_courses(child_id: int, current_user: dict = Depends(get_current_user)):
+    """Get detailed course progress for a child"""
+    # Verify parent-child relation
+    relation = next((r for r in parent_child_relations if r.parent_id == current_user["id"] and r.child_id == child_id and r.verified), None)
+    if not relation:
+        raise HTTPException(status_code=403, detail="Not authorized to view this child's data")
+    
+    child_enrollments = [e for e in enrollments if e.user_id == child_id]
+    
+    courses_data = []
+    for enrollment in child_enrollments:
+        course = next((c for c in courses if c.id == enrollment.course_id), None)
+        if course:
+            # Get lesson progress
+            user_progress = progress_db.get(child_id, {})
+            completed_lessons = user_progress.get(course.id, [])
+            total_lessons = sum(len(m.lessons) for m in course.modules)
+            
+            courses_data.append({
+                "course_id": course.id,
+                "course_title": course.title,
+                "instructor_name": course.instructor.name,
+                "progress": enrollment.progress,
+                "completed_lessons": len(completed_lessons),
+                "total_lessons": total_lessons,
+                "enrolled_at": enrollment.enrolled_at,
+                "category": course.category,
+                "level": course.level.value
+            })
+    
+    return courses_data
+
+@app.get("/api/parent/child/{child_id}/assignments")
+def get_parent_child_assignments(child_id: int, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Get assignments for a child"""
+    # Verify parent-child relation
+    relation = next((r for r in parent_child_relations if r.parent_id == current_user["id"] and r.child_id == child_id and r.verified), None)
+    if not relation:
+        raise HTTPException(status_code=403, detail="Not authorized to view this child's data")
+    
+    child_enrollments = [e for e in enrollments if e.user_id == child_id]
+    enrolled_course_ids = [e.course_id for e in child_enrollments]
+    
+    child_assignments = []
+    for assignment in assignments:
+        if assignment.course_id in enrolled_course_ids:
+            submission = _get_submission_for_user(assignment.id, child_id)
+            assignment_data = {
+                "assignment_id": assignment.id,
+                "title": assignment.title,
+                "course_name": assignment.course_name,
+                "due_date": assignment.due_date,
+                "max_grade": assignment.max_grade,
+                "status": "submitted" if submission else "pending",
+                "grade": submission.get("grade") if submission else None,
+                "feedback": submission.get("feedback") if submission else None,
+                "submitted_at": submission.get("submitted_at") if submission else None
+            }
+            
+            if status:
+                if status == "submitted" and submission:
+                    child_assignments.append(assignment_data)
+                elif status == "pending" and not submission:
+                    child_assignments.append(assignment_data)
+                elif status == "graded" and submission and submission.get("grade") is not None:
+                    child_assignments.append(assignment_data)
+            else:
+                child_assignments.append(assignment_data)
+    
+    return child_assignments
+
+@app.get("/api/parent/settings")
+def get_parent_notification_settings(current_user: dict = Depends(get_current_user)):
+    """Get parent notification settings"""
+    if current_user["id"] not in parent_notification_settings:
+        parent_notification_settings[current_user["id"]] = ParentNotificationSettings()
+    return parent_notification_settings[current_user["id"]]
+
+@app.put("/api/parent/settings")
+def update_parent_notification_settings(settings: ParentNotificationSettings, current_user: dict = Depends(get_current_user)):
+    """Update parent notification settings"""
+    parent_notification_settings[current_user["id"]] = settings
+    return settings
+
+@app.delete("/api/parent/unlink/{child_id}")
+def unlink_child(child_id: int, current_user: dict = Depends(get_current_user)):
+    """Unlink a child from parent account"""
+    relation = next((r for r in parent_child_relations if r.parent_id == current_user["id"] and r.child_id == child_id), None)
+    if not relation:
+        raise HTTPException(status_code=404, detail="Child link not found")
+    
+    parent_child_relations.remove(relation)
+    return {"message": "Child unlinked successfully"}
+
+@app.get("/api/child/parents")
+def get_child_parents(current_user: dict = Depends(get_current_user)):
+    """Get all parents linked to current student"""
+    relations = [r for r in parent_child_relations if r.child_id == current_user["id"] and r.verified]
+    
+    parents = []
+    for relation in relations:
+        parent = users_db.get(relation.parent_id)
+        if parent:
+            parents.append({
+                "parent_id": parent["id"],
+                "parent_name": parent["name"],
+                "parent_email": parent["email"],
+                "relation": relation.relation,
+                "linked_at": relation.created_at
+            })
+    
+    return parents
 
 if __name__ == "__main__":
     import uvicorn

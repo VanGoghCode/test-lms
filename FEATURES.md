@@ -210,3 +210,39 @@
 - Schedule live sessions
 - Recording playback
 - Attendance tracking
+
+---
+
+## 21. Parent Portal
+
+**Status:** ✅ Implemented
+
+**Implementation:**
+- Parents can link to their children's accounts via verification code
+- View child's enrolled courses and progress
+- Monitor assignments, grades, and submissions
+- Track upcoming and overdue assignments
+- See recent learning activity
+- Parent notification settings for progress updates
+- Students can view and manage linked parents
+
+**Endpoints:**
+- `POST /api/parent/link-child` - Request to link child account
+- `POST /api/parent/verify/{code}` - Verify parent link (student action)
+- `GET /api/parent/children` - Get linked children
+- `GET /api/parent/dashboard/{child_id}` - Get child's dashboard
+- `GET /api/parent/child/{child_id}/courses` - Get child's courses
+- `GET /api/parent/child/{child_id}/assignments` - Get child's assignments
+- `GET /api/parent/settings` - Get notification settings
+- `PUT /api/parent/settings` - Update notification settings
+- `DELETE /api/parent/unlink/{child_id}` - Unlink child
+- `GET /api/child/parents` - Get linked parents (student view)
+
+**Pages:**
+- `/parent-portal` - Main parent dashboard
+- `/parent-portal/verify` - Student verification page
+- `/parent-portal/my-parents` - Student's linked parents
+- `/parent-portal/child/[id]/courses` - Child's courses detail
+- `/parent-portal/child/[id]/assignments` - Child's assignments detail
+
+---

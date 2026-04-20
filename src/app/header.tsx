@@ -23,6 +23,8 @@ export function Header() {
           {user && <a href="/alerts">Alerts</a>}
           {user && <a href="/assignments">Assignments</a>}
           {user && <a href="/certificates">Certificates</a>}
+          {user && user.role === 'student' && <a href="/parent-portal/my-parents">My Parents</a>}
+          {user && user.role !== 'student' && <a href="/parent-portal">Parent Portal</a>}
           {(user?.role === 'instructor' || user?.role === 'admin') && (
             <>
               <a href="/instructor">Instructor</a>
