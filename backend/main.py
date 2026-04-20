@@ -1,12 +1,13 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 from passlib.context import CryptContext
 import jwt
 from datetime import datetime, timedelta
 from enum import Enum
+import re
 import secrets
 
 app = FastAPI()
@@ -49,16 +50,55 @@ class CourseStatus(str, Enum):
     DRAFT = "draft"
     PUBLISHED = "published"
 
+
+class CourseLevel(str, Enum):
+    BEGINNER = "beginner"
+    INTERMEDIATE = "intermediate"
+    ADVANCED = "advanced"
+
+
+class ReviewStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
 class Course(BaseModel):
     id: int
     title: str
     description: str
     instructor: Instructor
     category: str
+    level: CourseLevel = CourseLevel.BEGINNER
     thumbnail: str
     duration: str
     modules: List[Module]
     status: CourseStatus = CourseStatus.DRAFT
+
+
+class CourseReview(BaseModel):
+    id: int
+    course_id: int
+    user_id: int
+    user_name: str
+    user_avatar: str
+    rating: int = Field(ge=1, le=5)
+    content: str
+    status: ReviewStatus = ReviewStatus.PENDING
+    moderator_id: Optional[int] = None
+    moderator_name: Optional[str] = None
+    moderation_note: Optional[str] = None
+    created_at: str
+    moderated_at: Optional[str] = None
+
+
+class ReviewCreate(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    content: str = Field(min_length=10, max_length=2000)
+
+
+class ReviewModeration(BaseModel):
+    status: ReviewStatus
+    moderation_note: Optional[str] = None
 
 class Enrollment(BaseModel):
     id: int
@@ -573,6 +613,7 @@ class CourseCreate(BaseModel):
     title: str
     description: str
     category: str
+    level: CourseLevel = CourseLevel.BEGINNER
     thumbnail: str
     duration: str
     modules: List[ModuleCreate] = []
@@ -581,6 +622,7 @@ class CourseUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
+    level: Optional[CourseLevel] = None
     thumbnail: Optional[str] = None
     duration: Optional[str] = None
     modules: Optional[List[ModuleCreate]] = None
@@ -598,6 +640,7 @@ courses = [
         description="Learn Python from scratch. This course covers variables, data types, control flow, functions, and basic object-oriented programming concepts.",
         instructor=instructors[0],
         category="Programming",
+        level=CourseLevel.BEGINNER,
         thumbnail="linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
         duration="12 hours",
         modules=[
@@ -617,6 +660,7 @@ courses = [
         description="Master JavaScript programming. From variables and functions to DOM manipulation and async programming.",
         instructor=instructors[1],
         category="Programming",
+        level=CourseLevel.INTERMEDIATE,
         thumbnail="linear-gradient(135deg, #f093fb 0%, #f5576c 100%)",
         duration="15 hours",
         modules=[
@@ -632,6 +676,7 @@ courses = [
         description="Learn the fundamentals of user interface design. Master typography, color theory, layout, and design systems.",
         instructor=instructors[0],
         category="Design",
+        level=CourseLevel.BEGINNER,
         thumbnail="linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)",
         duration="8 hours",
         modules=[
@@ -647,6 +692,7 @@ courses = [
         description="Become proficient in Figma. Learn components, auto-layout, prototyping, and design systems.",
         instructor=instructors[1],
         category="Design",
+        level=CourseLevel.INTERMEDIATE,
         thumbnail="linear-gradient(135deg, #fa709a 0%, #fee140 100%)",
         duration="10 hours",
         modules=[
@@ -662,6 +708,7 @@ courses = [
         description="Analyze data using Python. Cover NumPy, Pandas, visualization with Matplotlib, and basic machine learning.",
         instructor=instructors[0],
         category="Data Science",
+        level=CourseLevel.ADVANCED,
         thumbnail="linear-gradient(135deg, #30cfd0 0%, #330867 100%)",
         duration="20 hours",
         modules=[
@@ -677,6 +724,7 @@ courses = [
         description="Introduction to machine learning concepts. Learn regression, classification, and neural network basics.",
         instructor=instructors[1],
         category="Data Science",
+        level=CourseLevel.ADVANCED,
         thumbnail="linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)",
         duration="18 hours",
         modules=[
@@ -717,6 +765,57 @@ course_prices: dict[int, float] = {
     5: 119.0,
     6: 129.0,
 }
+
+# Course discovery and review data
+course_search_popularity: dict[str, int] = {
+    "python": 22,
+    "design": 16,
+    "data science": 14,
+    "machine learning": 12,
+    "figma": 8,
+}
+
+course_reviews: List[CourseReview] = [
+    CourseReview(
+        id=1,
+        course_id=1,
+        user_id=1,
+        user_name="Alex Rivera",
+        user_avatar="AR",
+        rating=5,
+        content="Very practical and beginner friendly. The exercises made every concept click quickly.",
+        status=ReviewStatus.APPROVED,
+        moderator_id=3,
+        moderator_name="Casey Morgan",
+        created_at="2024-02-14 10:10:00",
+        moderated_at="2024-02-14 11:00:00",
+    ),
+    CourseReview(
+        id=2,
+        course_id=3,
+        user_id=1,
+        user_name="Alex Rivera",
+        user_avatar="AR",
+        rating=4,
+        content="Great examples on typography and hierarchy. Would love more section-by-section critiques.",
+        status=ReviewStatus.APPROVED,
+        moderator_id=2,
+        moderator_name="Jordan Lee",
+        created_at="2024-02-20 09:30:00",
+        moderated_at="2024-02-20 10:05:00",
+    ),
+    CourseReview(
+        id=3,
+        course_id=5,
+        user_id=1,
+        user_name="Alex Rivera",
+        user_avatar="AR",
+        rating=5,
+        content="Dense content but very useful. The Pandas and visualization units are excellent.",
+        status=ReviewStatus.PENDING,
+        created_at="2024-03-02 16:45:00",
+    ),
+]
 
 # Progress tracking: {user_id: {course_id: [completed_lesson_ids]}}
 progress_db: dict[int, dict[int, List[int]]] = {}
@@ -760,6 +859,89 @@ assignment_source_index: dict[tuple[int, int], dict] = {}
 quiz_source_index: dict[tuple[int, int, str], dict] = {}
 activity_source_index: dict[tuple[int, int], dict] = {}
 alert_state_by_term: dict[tuple[int, int], dict] = {}
+
+
+def _normalize_search_term(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return " ".join(value.lower().strip().split())
+
+
+def _record_search_term(value: Optional[str]) -> None:
+    normalized = _normalize_search_term(value)
+    if len(normalized) < 2:
+        return
+    course_search_popularity[normalized] = course_search_popularity.get(normalized, 0) + 1
+
+
+def _duration_to_hours(value: str) -> float:
+    match = re.search(r"(\d+(?:\.\d+)?)", value)
+    if not match:
+        return 0.0
+    return float(match.group(1))
+
+
+def _duration_matches(value: str, bucket: Optional[str]) -> bool:
+    if not bucket:
+        return True
+    hours = _duration_to_hours(value)
+    normalized_bucket = bucket.lower()
+    if normalized_bucket == "short":
+        return hours < 10
+    if normalized_bucket == "medium":
+        return 10 <= hours <= 15
+    if normalized_bucket == "long":
+        return hours > 15
+    return True
+
+
+def _course_search_text(course: Course) -> str:
+    module_titles = " ".join(module.title for module in course.modules)
+    lesson_titles = " ".join(lesson.title for module in course.modules for lesson in module.lessons)
+    values = [
+        course.title,
+        course.description,
+        course.category,
+        course.level.value,
+        course.instructor.name,
+        module_titles,
+        lesson_titles,
+    ]
+    return " ".join(values).lower()
+
+
+def _course_reviews_for(course_id: int, status: Optional[ReviewStatus] = None) -> List[CourseReview]:
+    reviews = [review for review in course_reviews if review.course_id == course_id]
+    if status is not None:
+        reviews = [review for review in reviews if review.status == status]
+    return reviews
+
+
+def _rating_distribution(reviews: List[CourseReview]) -> Dict[str, int]:
+    distribution = {str(value): 0 for value in range(1, 6)}
+    for review in reviews:
+        distribution[str(review.rating)] += 1
+    return distribution
+
+
+def _course_rating_summary(course_id: int) -> dict:
+    approved_reviews = _course_reviews_for(course_id, ReviewStatus.APPROVED)
+    rating_count = len(approved_reviews)
+    average_rating = round(sum(review.rating for review in approved_reviews) / rating_count, 1) if rating_count else 0.0
+    return {
+        "average_rating": average_rating,
+        "rating_count": rating_count,
+    }
+
+
+def _serialize_course(course: Course) -> dict:
+    payload = course.model_dump(mode="json")
+    payload.update(_course_rating_summary(course.id))
+    return payload
+
+
+def _serialize_review(review: CourseReview) -> dict:
+    return review.model_dump(mode="json")
 
 
 def _parse_timestamp(value: Optional[str]) -> datetime:
@@ -1202,13 +1384,95 @@ def reset_follow_up(current_user: dict = Depends(require_role(Role.ADMIN))):
 
 # Endpoints
 @app.get("/api/courses")
-def get_courses(category: str = None, search: str = None):
+def get_courses(
+    category: Optional[str] = None,
+    search: Optional[str] = None,
+    duration: Optional[str] = None,
+    level: Optional[CourseLevel] = None,
+    min_rating: Optional[float] = None,
+):
     result = courses
     if category:
-        result = [c for c in result if c.category == category]
+        result = [course for course in result if course.category.lower() == category.lower()]
+    if level:
+        result = [course for course in result if course.level == level]
+    if duration:
+        result = [course for course in result if _duration_matches(course.duration, duration)]
     if search:
-        result = [c for c in result if search.lower() in c.title.lower()]
-    return result
+        normalized_search = _normalize_search_term(search)
+        search_terms = [term for term in normalized_search.split(" ") if term]
+        if search_terms:
+            result = [
+                course
+                for course in result
+                if all(term in _course_search_text(course) for term in search_terms)
+            ]
+            _record_search_term(search)
+    if min_rating is not None:
+        result = [
+            course for course in result
+            if _course_rating_summary(course.id)["average_rating"] >= min_rating
+        ]
+    return [_serialize_course(course) for course in result]
+
+
+@app.get("/api/courses/search/suggestions")
+def get_course_search_suggestions(query: str = "", limit: int = 6):
+    normalized_query = _normalize_search_term(query)
+    if not normalized_query:
+        return {"items": []}
+
+    capped_limit = max(1, min(limit, 10))
+    suggestions: Dict[str, dict] = {}
+
+    def _add_suggestion(term: str) -> None:
+        normalized_term = _normalize_search_term(term)
+        if len(normalized_term) < 2 or normalized_query not in normalized_term:
+            return
+        current = suggestions.get(normalized_term)
+        candidate = {
+            "term": term.strip(),
+            "popularity": course_search_popularity.get(normalized_term, 0),
+            "starts_with": normalized_term.startswith(normalized_query),
+        }
+        if not current:
+            suggestions[normalized_term] = candidate
+            return
+        if candidate["starts_with"] and not current["starts_with"]:
+            suggestions[normalized_term] = candidate
+            return
+        if candidate["term"] and len(candidate["term"]) < len(current["term"]):
+            suggestions[normalized_term] = candidate
+
+    for term in course_search_popularity.keys():
+        _add_suggestion(term)
+
+    for course in courses:
+        _add_suggestion(course.title)
+        _add_suggestion(course.category)
+        _add_suggestion(course.instructor.name)
+        for module in course.modules:
+            _add_suggestion(module.title)
+            for lesson in module.lessons:
+                _add_suggestion(lesson.title)
+
+    ordered = sorted(
+        suggestions.values(),
+        key=lambda item: (not item["starts_with"], -item["popularity"], len(item["term"])),
+    )
+    return {"items": [item["term"] for item in ordered[:capped_limit]]}
+
+
+@app.get("/api/courses/search/popular")
+def get_popular_course_searches(limit: int = 6):
+    capped_limit = max(1, min(limit, 20))
+    popular = sorted(course_search_popularity.items(), key=lambda item: (-item[1], item[0]))
+    return {
+        "items": [
+            {"term": term, "count": count}
+            for term, count in popular[:capped_limit]
+        ]
+    }
 
 @app.get("/api/courses/{course_id}")
 def get_course(course_id: int):
@@ -1217,7 +1481,131 @@ def get_course(course_id: int):
         raise HTTPException(status_code=404, detail="Course not found")
 
     course_views[course_id] = course_views.get(course_id, 0) + 1
-    return course
+    return _serialize_course(course)
+
+
+@app.get("/api/courses/{course_id}/reviews")
+def get_course_reviews(course_id: int):
+    course = next((item for item in courses if item.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    approved_reviews = sorted(
+        _course_reviews_for(course_id, ReviewStatus.APPROVED),
+        key=lambda review: review.created_at,
+        reverse=True,
+    )
+    return {
+        "summary": _course_rating_summary(course_id),
+        "distribution": _rating_distribution(approved_reviews),
+        "reviews": [_serialize_review(review) for review in approved_reviews],
+    }
+
+
+@app.post("/api/courses/{course_id}/reviews")
+def create_course_review(
+    course_id: int,
+    review_data: ReviewCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    if Role(current_user["role"]) != Role.STUDENT:
+        raise HTTPException(status_code=403, detail="Only students can submit course reviews")
+
+    course = next((item for item in courses if item.id == course_id), None)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    is_enrolled = any(
+        enrollment.course_id == course_id and enrollment.user_id == current_user["id"]
+        for enrollment in enrollments
+    )
+    if not is_enrolled:
+        raise HTTPException(status_code=403, detail="Enroll in the course before submitting a review")
+
+    cleaned_content = review_data.content.strip()
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    existing_review = next(
+        (
+            review
+            for review in course_reviews
+            if review.course_id == course_id and review.user_id == current_user["id"]
+        ),
+        None,
+    )
+
+    if existing_review:
+        existing_review.rating = review_data.rating
+        existing_review.content = cleaned_content
+        existing_review.status = ReviewStatus.PENDING
+        existing_review.moderator_id = None
+        existing_review.moderator_name = None
+        existing_review.moderation_note = None
+        existing_review.created_at = now
+        existing_review.moderated_at = None
+        review = existing_review
+    else:
+        review = CourseReview(
+            id=len(course_reviews) + 1,
+            course_id=course_id,
+            user_id=current_user["id"],
+            user_name=current_user["name"],
+            user_avatar=current_user["avatar"],
+            rating=review_data.rating,
+            content=cleaned_content,
+            status=ReviewStatus.PENDING,
+            created_at=now,
+        )
+        course_reviews.append(review)
+
+    return {
+        "message": "Review submitted and queued for moderation",
+        "review": _serialize_review(review),
+    }
+
+
+@app.get("/api/reviews/moderation-queue")
+def get_review_moderation_queue(
+    status: ReviewStatus = ReviewStatus.PENDING,
+    current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN)),
+):
+    queue_items = sorted(
+        [review for review in course_reviews if review.status == status],
+        key=lambda review: review.created_at,
+    )
+    return {
+        "items": [
+            {
+                **_serialize_review(review),
+                "course_title": next((course.title for course in courses if course.id == review.course_id), "Unknown course"),
+            }
+            for review in queue_items
+        ]
+    }
+
+
+@app.put("/api/reviews/{review_id}/moderate")
+def moderate_review(
+    review_id: int,
+    moderation_data: ReviewModeration,
+    current_user: dict = Depends(require_role(Role.INSTRUCTOR, Role.ADMIN)),
+):
+    if moderation_data.status == ReviewStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Cannot set moderation status to pending")
+
+    review = next((item for item in course_reviews if item.id == review_id), None)
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found")
+
+    review.status = moderation_data.status
+    review.moderator_id = current_user["id"]
+    review.moderator_name = current_user["name"]
+    review.moderation_note = moderation_data.moderation_note.strip() if moderation_data.moderation_note else None
+    review.moderated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+    return {
+        "message": "Review moderation updated",
+        "review": _serialize_review(review),
+    }
 
 # Instructor Course Management
 @app.post("/api/courses", status_code=201)
@@ -1247,6 +1635,7 @@ def create_course(course_data: CourseCreate, current_user: dict = Depends(requir
         description=course_data.description,
         instructor=Instructor(id=current_user["id"], name=current_user["name"], avatar=current_user["avatar"]),
         category=course_data.category,
+        level=course_data.level,
         thumbnail=course_data.thumbnail,
         duration=course_data.duration,
         modules=modules,
@@ -1271,6 +1660,8 @@ def update_course(course_id: int, course_data: CourseUpdate, current_user: dict 
         course.description = course_data.description
     if course_data.category is not None:
         course.category = course_data.category
+    if course_data.level is not None:
+        course.level = course_data.level
     if course_data.thumbnail is not None:
         course.thumbnail = course_data.thumbnail
     if course_data.duration is not None:

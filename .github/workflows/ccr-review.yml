@@ -74,7 +74,7 @@ jobs:
 
           # ── Inline comments ───────────────────────────────────────
           # Post short review comments on specific PR lines.
-          # Default: "false"
+          # Default: "true"
           post-inline-comments: "true"
 
           # Cap on inline comments per run to avoid noisy PRs.

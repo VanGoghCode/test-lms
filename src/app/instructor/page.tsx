@@ -71,6 +71,7 @@ export default function InstructorDashboard() {
         <h1>Instructor Dashboard</h1>
         <div style={{ display: 'flex', gap: 12 }}>
           <a href="/instructor/analytics" className="btn-secondary">View Analytics</a>
+          <a href="/instructor/reviews" className="btn-secondary">Review Moderation</a>
           <a href="/instructor/courses/new" className="btn-primary">Create New Course</a>
         </div>
       </div>
