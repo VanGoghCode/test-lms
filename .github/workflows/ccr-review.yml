@@ -99,12 +99,12 @@ jobs:
           # ── Payload limits ────────────────────────────────────────
           # Maximum number of changed files to send to the LLM.
           # Default: "25"
-          max-files: "30"
+            max-files: "30"
 
           # Total character budget for file context in the prompt.
           # Higher = more context but slower and more expensive.
           # Default: "12000"
-          max-context-chars: "1200000"
+            max-context-chars: "60000"
 
           # ── Model tuning ──────────────────────────────────────────
           # Sampling temperature — lower is more deterministic.
