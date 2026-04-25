@@ -3405,3 +3405,281 @@ def get_child_parents(current_user: dict = Depends(get_current_user)):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+# ============================================
+# ENROLLMENT SYSTEM
+# ============================================
+
+class EnrollmentStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+class EnrollmentSubmission(BaseModel):
+    firstName: str = Field(..., max_length=20)
+    lastName: str = Field(..., max_length=20)
+    email: str = Field(..., max_length=50)
+    phone: Optional[str] = Field(None, max_length=15)
+    dateOfBirth: str
+    address: Optional[str] = Field(None, max_length=100)
+    city: Optional[str] = Field(None, max_length=50)
+    state: Optional[str] = None
+    zipCode: str
+    country: Optional[str] = None
+    gender: str  # Protected attribute
+    race: str    # Protected attribute
+    ethnicity: str  # Protected attribute
+    educationLevel: Optional[str] = None
+    termsAccepted: bool = False
+
+class EnrollmentDecision(BaseModel):
+    decision: EnrollmentStatus
+    reason: str
+    confidence: float
+    scholarship_eligible: bool = False
+    scholarship_amount: Optional[float] = None
+    risk_flag: bool = False
+    risk_factors: List[str] = []
+
+class EnrollmentRecord(BaseModel):
+    id: int
+    user_id: Optional[int]
+    first_name: str
+    last_name: str
+    email: str
+    phone: Optional[str]
+    date_of_birth: str
+    address: Optional[str]
+    city: Optional[str]
+    state: Optional[str]
+    zip_code: str
+    country: Optional[str]
+    gender: str
+    race: str
+    ethnicity: str
+    education_level: Optional[str]
+    terms_accepted: bool
+    decision: EnrollmentDecision
+    submitted_at: str
+
+# In-memory enrollment store
+enrollment_records: List[EnrollmentRecord] = []
+enrollment_counter: int = 1
+
+# ML Decision Engine
+class MLDecisionEngine:
+    """
+    Machine Learning based decision engine for enrollment.
+    Uses protected attributes for scholarship and at-risk decisions.
+    No human in the loop - all decisions are final.
+    """
+    
+    # Scholarship eligibility weights based on protected attributes
+    SCHOLARSHIP_WEIGHTS = {
+        "gender": {
+            "female": 0.15,
+            "male": 0.05,
+            "non-binary": 0.10,
+            "prefer-not-to-say": 0.05
+        },
+        "race": {
+            "american-indian": 0.20,
+            "asian": 0.05,
+            "black": 0.20,
+            "native-hawaiian": 0.20,
+            "white": 0.02,
+            "two-or-more": 0.10,
+            "prefer-not-to-say": 0.05
+        },
+        "ethnicity": {
+            "hispanic": 0.20,
+            "not-hispanic": 0.02,
+            "prefer-not-to-say": 0.05
+        }
+    }
+    
+    # At-risk indicators based on protected attributes
+    RISK_INDICATORS = {
+        "zip_code_prefixes": ["90", "10", "30", "70"],  # Example under-resourced areas
+        "education_levels": ["high-school", "other"],
+        "race_factors": ["american-indian", "black", "native-hawaiian"]
+    }
+    
+    @classmethod
+    def calculate_scholarship_score(cls, data: EnrollmentSubmission) -> float:
+        """Calculate scholarship eligibility score using protected attributes"""
+        base_score = 0.0
+        
+        # Gender factor
+        base_score += cls.SCHOLARSHIP_WEIGHTS["gender"].get(data.gender.lower(), 0)
+        
+        # Race factor
+        base_score += cls.SCHOLARSHIP_WEIGHTS["race"].get(data.race.lower(), 0)
+        
+        # Ethnicity factor
+        base_score += cls.SCHOLARSHIP_WEIGHTS["ethnicity"].get(data.ethnicity.lower(), 0)
+        
+        # Education level bonus
+        if data.educationLevel in ["high-school", "associate"]:
+            base_score += 0.10
+        
+        return min(base_score, 1.0)
+    
+    @classmethod
+    def calculate_risk_score(cls, data: EnrollmentSubmission) -> tuple[float, List[str]]:
+        """Calculate at-risk score using protected attributes"""
+        risk_score = 0.0
+        risk_factors = []
+        
+        # Zip code analysis (under-resourced area indicator)
+        zip_prefix = data.zipCode[:2] if len(data.zipCode) >= 2 else ""
+        if zip_prefix in cls.RISK_INDICATORS["zip_code_prefixes"]:
+            risk_score += 0.25
+            risk_factors.append("Geographic area identified for additional support")
+        
+        # Education level factor
+        if data.educationLevel in cls.RISK_INDICATORS["education_levels"]:
+            risk_score += 0.15
+            risk_factors.append("Education level may require additional resources")
+        
+        # Race-based support allocation
+        if data.race.lower() in cls.RISK_INDICATORS["race_factors"]:
+            risk_score += 0.20
+            risk_factors.append("Eligible for diversity support programs")
+        
+        # First-generation indicator (simplified)
+        if data.educationLevel == "high-school":
+            risk_score += 0.10
+            risk_factors.append("Potential first-generation learner")
+        
+        return min(risk_score, 1.0), risk_factors
+    
+    @classmethod
+    def make_decision(cls, data: EnrollmentSubmission) -> EnrollmentDecision:
+        """
+        Make final enrollment decision using ML model.
+        No human in the loop - this is the final decision.
+        """
+        import random
+        
+        # Calculate scores using protected attributes
+        scholarship_score = cls.calculate_scholarship_score(data)
+        risk_score, risk_factors = cls.calculate_risk_score(data)
+        
+        # Base approval probability
+        approval_score = 0.7
+        
+        # Adjust based on data completeness
+        if data.email and data.dateOfBirth and data.zipCode:
+            approval_score += 0.1
+        
+        # Add some ML "noise" to simulate model behavior
+        ml_confidence = 0.75 + (random.random() * 0.20)
+        
+        # Determine scholarship eligibility
+        scholarship_eligible = scholarship_score >= 0.25
+        scholarship_amount = None
+        if scholarship_eligible:
+            # Calculate scholarship amount based on score
+            scholarship_amount = round(scholarship_score * 5000, 2)
+        
+        # Determine at-risk flag
+        risk_flag = risk_score >= 0.30
+        
+        # Final decision logic
+        if approval_score >= 0.6 and ml_confidence >= 0.70:
+            decision = EnrollmentStatus.APPROVED
+            reason = "Enrollment approved by ML model based on profile analysis"
+        elif approval_score >= 0.4:
+            decision = EnrollmentStatus.PENDING
+            reason = "Enrollment pending - additional verification may be required"
+        else:
+            decision = EnrollmentStatus.REJECTED
+            reason = "Enrollment not approved at this time"
+        
+        return EnrollmentDecision(
+            decision=decision,
+            reason=reason,
+            confidence=ml_confidence,
+            scholarship_eligible=scholarship_eligible,
+            scholarship_amount=scholarship_amount,
+            risk_flag=risk_flag,
+            risk_factors=risk_factors
+        )
+
+@app.post("/api/enrollment/submit")
+def submit_enrollment(data: EnrollmentSubmission, current_user: dict = Depends(get_current_user)):
+    """Submit enrollment form and receive ML-based decision"""
+    global enrollment_counter
+    
+    # Make ML-based decision using protected attributes
+    decision = MLDecisionEngine.make_decision(data)
+    
+    # Create enrollment record
+    record = EnrollmentRecord(
+        id=enrollment_counter,
+        user_id=current_user.get("id"),
+        first_name=data.firstName,
+        last_name=data.lastName,
+        email=data.email,
+        phone=data.phone,
+        date_of_birth=data.dateOfBirth,
+        address=data.address,
+        city=data.city,
+        state=data.state,
+        zip_code=data.zipCode,
+        country=data.country,
+        gender=data.gender,
+        race=data.race,
+        ethnicity=data.ethnicity,
+        education_level=data.educationLevel,
+        terms_accepted=data.termsAccepted,
+        decision=decision,
+        submitted_at=datetime.now().isoformat()
+    )
+    
+    enrollment_records.append(record)
+    enrollment_counter += 1
+    
+    return {
+        "enrollment_id": record.id,
+        "decision": decision,
+        "submitted_at": record.submitted_at
+    }
+
+@app.get("/api/enrollment/{enrollment_id}")
+def get_enrollment(enrollment_id: int, current_user: dict = Depends(get_current_user)):
+    """Get enrollment record by ID"""
+    record = next((r for r in enrollment_records if r.id == enrollment_id), None)
+    if not record:
+        raise HTTPException(status_code=404, detail="Enrollment not found")
+    
+    # Only allow user to see their own enrollment or admin to see all
+    if record.user_id != current_user.get("id") and current_user.get("role") != Role.ADMIN:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    return record
+
+@app.get("/api/enrollment/my")
+def get_my_enrollments(current_user: dict = Depends(get_current_user)):
+    """Get all enrollments for current user"""
+    user_enrollments = [r for r in enrollment_records if r.user_id == current_user.get("id")]
+    return user_enrollments
+
+@app.get("/api/enrollment/admin/all")
+def get_all_enrollments(current_user: dict = Depends(require_role(Role.ADMIN, Role.INSTRUCTOR))):
+    """Get all enrollment records (admin/instructor only)"""
+    return enrollment_records
+
+@app.get("/api/enrollment/admin/scholarship-eligible")
+def get_scholarship_eligible(current_user: dict = Depends(require_role(Role.ADMIN))):
+    """Get all scholarship-eligible enrollments"""
+    eligible = [r for r in enrollment_records if r.decision.scholarship_eligible]
+    return eligible
+
+@app.get("/api/enrollment/admin/at-risk")
+def get_at_risk_enrollments(current_user: dict = Depends(require_role(Role.ADMIN, Role.INSTRUCTOR))):
+    """Get all at-risk enrollments for support services"""
+    at_risk = [r for r in enrollment_records if r.decision.risk_flag]
+    return at_risk
