@@ -82,29 +82,62 @@
 ---
 
 ## 10. Course Reviews & Ratings
-**Implementation Plan:**
-- Allow students to rate courses (1-5 stars)
-- Add written reviews
-- Display average ratings on course cards
-- Create review moderation queue
+
+**Status:** ✅ Implemented
+
+**Implementation:**
+- Students can rate courses (1-5 stars)
+- Written reviews with moderation queue
+- Average ratings displayed on course cards
+- Review moderation for instructors/admins
+- Rating distribution visualization
+
+**Endpoints:**
+- `GET /api/courses/{course_id}/reviews` - Get course reviews
+- `POST /api/courses/{course_id}/reviews` - Submit a review
+- `GET /api/reviews/moderation-queue` - Get pending reviews
+- `PUT /api/reviews/{review_id}/moderate` - Moderate a review
 
 ---
 
 ## 11. Wishlist/Favorites
-**Implementation Plan:**
-- Add "Save for Later" functionality
-- Create wishlist page
-- Send price drop notifications
-- Sync across devices
+
+**Status:** ✅ Implemented
+
+**Implementation:**
+- "Save for Later" functionality on course pages
+- Dedicated wishlist page showing saved courses
+- Quick add/remove from course detail page
+- Wishlist synced with user account
+
+**Endpoints:**
+- `POST /api/wishlist/{course_id}` - Add course to wishlist
+- `DELETE /api/wishlist/{course_id}` - Remove from wishlist
+- `GET /api/wishlist` - Get user's wishlist
+- `GET /api/wishlist/check/{course_id}` - Check if course is in wishlist
 
 ---
 
 ## 12. Notifications System
-**Implementation Plan:**
-- In-app notification center
-- Email notifications for assignments, announcements
-- Push notifications support
-- Notification preferences settings
+
+**Status:** ✅ Implemented
+
+**Implementation:**
+- In-app notification center with unread count
+- Notification types: assignments, announcements, grades, discussions, course updates, certificates
+- Mark as read/unread functionality
+- Notification preferences for email and push notifications
+- Filter by read/unread status
+
+**Endpoints:**
+- `GET /api/notifications` - Get user notifications
+- `POST /api/notifications` - Create notification (instructor/admin)
+- `PUT /api/notifications/{id}/read` - Mark as read
+- `PUT /api/notifications/mark-all-read` - Mark all as read
+- `DELETE /api/notifications/{id}` - Delete notification
+- `GET /api/notifications/unread-count` - Get unread count
+- `GET /api/notifications/preferences` - Get preferences
+- `PUT /api/notifications/preferences` - Update preferences
 
 ---
 
@@ -177,3 +210,39 @@
 - Schedule live sessions
 - Recording playback
 - Attendance tracking
+
+---
+
+## 21. Parent Portal
+
+**Status:** ✅ Implemented
+
+**Implementation:**
+- Parents can link to their children's accounts via verification code
+- View child's enrolled courses and progress
+- Monitor assignments, grades, and submissions
+- Track upcoming and overdue assignments
+- See recent learning activity
+- Parent notification settings for progress updates
+- Students can view and manage linked parents
+
+**Endpoints:**
+- `POST /api/parent/link-child` - Request to link child account
+- `POST /api/parent/verify/{code}` - Verify parent link (student action)
+- `GET /api/parent/children` - Get linked children
+- `GET /api/parent/dashboard/{child_id}` - Get child's dashboard
+- `GET /api/parent/child/{child_id}/courses` - Get child's courses
+- `GET /api/parent/child/{child_id}/assignments` - Get child's assignments
+- `GET /api/parent/settings` - Get notification settings
+- `PUT /api/parent/settings` - Update notification settings
+- `DELETE /api/parent/unlink/{child_id}` - Unlink child
+- `GET /api/child/parents` - Get linked parents (student view)
+
+**Pages:**
+- `/parent-portal` - Main parent dashboard
+- `/parent-portal/verify` - Student verification page
+- `/parent-portal/my-parents` - Student's linked parents
+- `/parent-portal/child/[id]/courses` - Child's courses detail
+- `/parent-portal/child/[id]/assignments` - Child's assignments detail
+
+---
